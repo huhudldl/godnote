@@ -23,7 +23,8 @@ const editor = new Editor(editorEl, {
   toast,
   onSaved: () => {
     editorEl.querySelector('.save-state').textContent = '저장됨';
-    scheduleSync(4000);
+    // 마지막 동작 후 약 3.5초(로컬 저장 0.5초 + 3초) 뒤 드라이브에 올림
+    scheduleSync(3000);
   },
   onClose: () => {
     editorEl.hidden = true;
@@ -326,6 +327,8 @@ if (drive.hasValidToken()) runSync();
 // 앱으로 돌아오면 / 온라인이 되면 동기화
 document.addEventListener('visibilitychange', () => {
   if (document.visibilityState === 'visible') scheduleSync(300);
+  // 다른 앱으로 넘어가면 기다리지 않고 바로 저장·업로드
+  else if (drive.hasValidToken()) runSync();
   else editor.flush();
 });
 window.addEventListener('online', () => scheduleSync(300));

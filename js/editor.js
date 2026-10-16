@@ -476,8 +476,15 @@ export class Editor {
     const sel = window.getSelection();
     sel.removeAllRanges();
     sel.addRange(range);
+    // 입력하는 동안에도 자동 저장 (편집을 끝내지 않아도 저장됨)
+    const onInput = () => {
+      const t = this.pageInk(pid).texts.find(x => x.id === id);
+      if (t) { t.text = el.innerText.replace(/\n$/, ''); this.scheduleSave(); }
+    };
+    el.addEventListener('input', onInput);
     const done = () => {
       el.removeEventListener('blur', done);
+      el.removeEventListener('input', onInput);
       el.contentEditable = 'false';
       el.classList.remove('editing');
       const pi = this.pageInk(pid);
