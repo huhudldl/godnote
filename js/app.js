@@ -726,6 +726,42 @@ function renderAccount() {
   };
 }
 
+// ---------- 화면 모드 (자동 · 라이트 · 다크) ----------
+const THEME_KEY = 'godnote.theme';
+const darkQuery = matchMedia('(prefers-color-scheme: dark)');
+
+function themeMode() {
+  try { return localStorage.getItem(THEME_KEY) || 'auto'; } catch { return 'auto'; }
+}
+function isDark() {
+  const t = document.documentElement.dataset.theme;
+  return t ? t === 'dark' : darkQuery.matches;
+}
+function applyTheme(mode) {
+  if (mode === 'light' || mode === 'dark') document.documentElement.dataset.theme = mode;
+  else { delete document.documentElement.dataset.theme; mode = 'auto'; }
+  try { localStorage.setItem(THEME_KEY, mode); } catch {}
+  updateThemeUi();
+}
+function updateThemeUi() {
+  const dark = isDark();
+  document.querySelector('meta[name="theme-color"]').content = dark ? '#18181a' : '#f6f5f2';
+  $('#theme-btn').classList.toggle('is-dark', dark);
+  $('#theme-btn').title = dark ? '라이트 모드로 보기' : '다크 모드로 보기';
+  const mb = editorEl.querySelector('[data-act="theme"]');
+  if (mb) mb.textContent = dark ? '라이트 모드로 보기' : '다크 모드로 보기';
+  const mode = themeMode();
+  document.querySelectorAll('#theme-seg [data-theme-mode]').forEach(b => b.classList.toggle('on', b.dataset.themeMode === mode));
+}
+$('#theme-btn').onclick = () => applyTheme(isDark() ? 'light' : 'dark');
+editorEl.querySelector('[data-act="theme"]').onclick = () => {
+  editorEl.querySelector('.more-menu').hidden = true;
+  applyTheme(isDark() ? 'light' : 'dark');
+};
+document.querySelectorAll('#theme-seg [data-theme-mode]').forEach(b => { b.onclick = () => applyTheme(b.dataset.themeMode); });
+darkQuery.addEventListener('change', updateThemeUi);
+updateThemeUi();
+
 // ---------- 시작 ----------
 drive.init();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});

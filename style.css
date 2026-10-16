@@ -9,22 +9,27 @@
   --danger: #d33b30;
   --desk: #e9e7e2;
   --shadow: 0 1px 2px rgba(0,0,0,.06), 0 4px 14px rgba(0,0,0,.06);
+  --chip: #ecebe8; --chip-hover: #e2e1dd; --toast: rgba(30,30,32,.92);
   --safe-top: env(safe-area-inset-top, 0px);
   --safe-bottom: env(safe-area-inset-bottom, 0px);
   color-scheme: light;
 }
+/* 다크 모드: 시스템 설정을 따르거나(자동) 직접 고름(data-theme) */
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg: #1c1c1e; --surface: #2a2a2d; --text: #f2f2f4; --muted: #9a9aa2;
-    --line: #3a3a3e; --accent: #f07a6e; --accent-soft: #4a2723; --desk: #141416;
-    --shadow: 0 1px 2px rgba(0,0,0,.4), 0 4px 14px rgba(0,0,0,.3);
+    --bg: #18181a; --surface: #262629; --text: #f2f2f4; --muted: #9c9ca4;
+    --line: #38383d; --accent: #f07a6e; --accent-soft: #46262a; --desk: #0f0f11;
+    --shadow: 0 1px 2px rgba(0,0,0,.45), 0 4px 14px rgba(0,0,0,.35);
+    --chip: #2c2c30; --chip-hover: #37373c; --toast: rgba(60,60,66,.96);
     color-scheme: dark;
   }
 }
 :root[data-theme="dark"] {
-  --bg: #1c1c1e; --surface: #2a2a2d; --text: #f2f2f4; --muted: #9a9aa2;
-  --line: #3a3a3e; --accent: #f07a6e; --accent-soft: #4a2723; --desk: #141416;
-  color-scheme: dark;
+    --bg: #18181a; --surface: #262629; --text: #f2f2f4; --muted: #9c9ca4;
+    --line: #38383d; --accent: #f07a6e; --accent-soft: #46262a; --desk: #0f0f11;
+    --shadow: 0 1px 2px rgba(0,0,0,.45), 0 4px 14px rgba(0,0,0,.35);
+    --chip: #2c2c30; --chip-hover: #37373c; --toast: rgba(60,60,66,.96);
+    color-scheme: dark;
 }
 
 * { box-sizing: border-box; }
@@ -198,7 +203,7 @@ details summary { cursor: pointer; font-weight: 600; }
 
 .toast {
   position: fixed; left: 50%; bottom: calc(var(--safe-bottom) + 60px); transform: translateX(-50%); z-index: 100;
-  background: rgba(30,30,32,.92); color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px; max-width: calc(100vw - 32px);
+  background: var(--toast); color: #fff; padding: 10px 16px; border-radius: 12px; font-size: 14px; max-width: calc(100vw - 32px);
 }
 .drop {
   position: fixed; inset: 12px; border: 3px dashed var(--accent); border-radius: 20px; z-index: 90;
@@ -398,9 +403,6 @@ details summary { cursor: pointer; font-weight: 600; }
 }
 
 /* ===== 서재: 핀터레스트 스타일 ===== */
-:root { --chip: #ecebe8; --chip-hover: #e2e1dd; }
-@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --chip: #2f2f33; --chip-hover: #3a3a3f; } }
-:root[data-theme="dark"] { --chip: #2f2f33; --chip-hover: #3a3a3f; }
 
 #library { padding: calc(var(--safe-top) + 10px) 20px calc(var(--safe-bottom) + 110px); }
 #library .topbar { gap: 12px; padding: 6px 0; }
@@ -488,4 +490,25 @@ details summary { cursor: pointer; font-weight: 600; }
   #library { padding-left: 12px; padding-right: 12px; }
   #library .topbar h1 { display: none; }
   #library .sync-btn .sync-text { display: none; }
+}
+
+/* 화면 모드 전환 버튼 */
+.theme-btn .ico-sun { display: none; }
+.theme-btn.is-dark .ico-sun { display: block; }
+.theme-btn.is-dark .ico-moon { display: none; }
+.seg-group { display: flex; gap: 4px; padding: 4px; border-radius: 12px; background: var(--chip); }
+.seg-group button { flex: 1; border: 0; background: none; padding: 8px 0; border-radius: 9px; font-weight: 600; font-size: 14px; color: var(--muted); }
+.seg-group button.on { background: var(--text); color: var(--bg); }
+.seg-group button:focus:not(:focus-visible) { outline: none; }
+.setting-row { display: flex; flex-direction: column; gap: 8px; }
+.setting-row > span { font-weight: 600; }
+/* 다크 모드에서 종이는 그대로 흰색, 주변만 어둡게 */
+:root[data-theme="dark"] .page, :root[data-theme="dark"] #library .card .cover { box-shadow: 0 0 0 1px rgba(255,255,255,.06), 0 2px 8px rgba(0,0,0,.5); }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .page, :root:not([data-theme="light"]) #library .card .cover { box-shadow: 0 0 0 1px rgba(255,255,255,.06), 0 2px 8px rgba(0,0,0,.5); } }
+/* 다크 모드에서 검정 색 버튼이 묻히지 않게 테두리 */
+:root[data-theme="dark"] .qc, :root[data-theme="dark"] .swatch, :root[data-theme="dark"] .lasso-colors button { box-shadow: 0 0 0 1px rgba(255,255,255,.35); }
+:root[data-theme="dark"] .qc.on, :root[data-theme="dark"] .swatch.on { box-shadow: 0 0 0 2px var(--accent); }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .qc, :root:not([data-theme="light"]) .swatch, :root:not([data-theme="light"]) .lasso-colors button { box-shadow: 0 0 0 1px rgba(255,255,255,.35); }
+  :root:not([data-theme="light"]) .qc.on, :root:not([data-theme="light"]) .swatch.on { box-shadow: 0 0 0 2px var(--accent); }
 }
