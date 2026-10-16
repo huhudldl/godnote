@@ -29,6 +29,16 @@ function distToSeg(px, py, ax, ay, bx, by) {
   return Math.sqrt(x * x + y * y);
 }
 
+// 점이 다각형(평평한 [x,y,x,y…]) 안에 있는지
+function inPoly(x, y, poly) {
+  let inside = false;
+  for (let i = 0, j = poly.length - 2; i < poly.length; j = i, i += 2) {
+    const xi = poly[i], yi = poly[i + 1], xj = poly[j], yj = poly[j + 1];
+    if ((yi > y) !== (yj > y) && x < (xj - xi) * (y - yi) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
+}
+
 export function drawStroke(ctx, s) {
   const p = s.p;
   const n = p.length / 3;
@@ -82,6 +92,36 @@ export function drawPageInk(ctx, pageInk) {
   for (const s of pageInk.strokes) if (s.t !== 'hl') drawStroke(ctx, s);
 }
 
+// CSS(pre-wrap, line-height 1.3)와 비슷하게 줄바꿈
+export function wrapLines(ctx, text, maxW) {
+  const lines = [];
+  for (const para of String(text).split('\n')) {
+    let line = '';
+    for (const ch of para) {
+      if (line && ctx.measureText(line + ch).width > maxW) {
+        const sp = line.lastIndexOf(' ');
+        if (sp > 0 && ch !== ' ') { lines.push(line.slice(0, sp)); line = line.slice(sp + 1) + ch; }
+        else { lines.push(line); line = ch === ' ' ? '' : ch; }
+      } else line += ch;
+    }
+    lines.push(line);
+  }
+  return lines;
+}
+
+export function drawTexts(ctx, texts) {
+  if (!texts || !texts.length) return;
+  ctx.save();
+  ctx.textBaseline = 'middle';
+  for (const t of texts) {
+    ctx.fillStyle = t.c;
+    ctx.font = `${t.s}px -apple-system, "Apple SD Gothic Neo", "Malgun Gothic", sans-serif`;
+    const lh = t.s * 1.3;
+    wrapLines(ctx, t.text, t.w).forEach((l, j) => ctx.fillText(l, t.x, t.y + lh * (j + 0.5)));
+  }
+  ctx.restore();
+}
+
 export function drawPaper(ctx, w, h, bg) {
   ctx.fillStyle = '#fff';
   ctx.fillRect(0, 0, w, h);
@@ -101,8 +141,10 @@ export function drawPaper(ctx, w, h, bg) {
 }
 
 export class Editor {
-  constructor(root, { onSaved, onClose, toast }) {
+  constructor(root, { onSaved, onClose, toast, onExport }) {
     this.root = root;
+    this.onExport = onExport;
+    this.lassoSel = null;  // 올가미로 고른 필기 묶음
     this.onSaved = onSaved;
     this.onClose = onClose;
     this.toast = toast;
@@ -169,6 +211,7 @@ export class Editor {
 
   async close() {
     this.finishEditing();
+    this.clearLasso();
     this.deselect();
     await this.flush();
     const note = this.note;
@@ -234,6 +277,7 @@ export class Editor {
     const a = this.undoStack.pop();
     if (!a) return;
     this.deselect();
+    this.clearLasso();
     this.ink[a.pid] = JSON.parse(a.before);
     this.redoStack.push(a);
     this.refreshPage(a.pid);
@@ -245,6 +289,7 @@ export class Editor {
     const a = this.redoStack.pop();
     if (!a) return;
     this.deselect();
+    this.clearLasso();
     this.ink[a.pid] = JSON.parse(a.after);
     this.undoStack.push(a);
     this.refreshPage(a.pid);
@@ -262,6 +307,7 @@ export class Editor {
   get scale() { return this.baseScale() * this.zoom; }
 
   buildPages() {
+    this.clearLasso();
     this.observer.disconnect();
     for (const el of this.pageEls.values()) this.releasePage(el);
     this.inner.innerHTML = '';
@@ -271,7 +317,7 @@ export class Editor {
       el.className = 'page';
       el.dataset.pid = pg.id;
       el.dataset.index = i;
-      el.innerHTML = '<canvas class="bg"></canvas><canvas class="ink"></canvas><div class="items"></div>';
+      el.innerHTML = '<canvas class="bg"></canvas><div class="items imgs"></div><canvas class="ink"></canvas><div class="items texts"></div>';
       this.inner.appendChild(el);
       this.pageEls.set(pg.id, el);
       this.observer.observe(el);
@@ -291,6 +337,7 @@ export class Editor {
       this.renderItems(pg.id);
     }
     if (keepPosition) this.scroller.scrollTop = ratio * this.scroller.scrollHeight;
+    if (this.lassoSel) this.updateLassoBox();
     clearTimeout(this.rerenderTimer);
     this.rerenderTimer = setTimeout(() => {
       for (const el of this.pageEls.values()) if (el.dataset.visible === '1') this.renderPage(el);
@@ -391,20 +438,21 @@ export class Editor {
   // ---------- 텍스트 / 이미지 항목 ----------
   renderItems(pid) {
     const el = this.pageEls.get(pid);
-    const box = el.querySelector('.items');
+    const imgBox = el.querySelector('.items.imgs');
+    const box = el.querySelector('.items.texts');
     const s = this.scale;
     const pi = this.ink[pid];
     const keep = new Set();
     if (pi) {
       for (const im of pi.images) {
         keep.add(im.id);
-        let d = box.querySelector(`[data-id="${im.id}"]`);
+        let d = imgBox.querySelector(`[data-id="${im.id}"]`);
         if (!d) {
           d = document.createElement('div');
           d.className = 'item image';
           d.dataset.id = im.id;
           d.innerHTML = '<img draggable="false" alt="">';
-          box.prepend(d);
+          imgBox.appendChild(d);
         }
         const img = d.querySelector('img');
         if (img.getAttribute('src') !== im.src) img.src = im.src;
@@ -423,7 +471,7 @@ export class Editor {
         Object.assign(d.style, { left: t.x * s + 'px', top: t.y * s + 'px', width: t.w * s + 'px', fontSize: t.s * s + 'px', color: t.c });
       }
     }
-    for (const d of [...box.children]) if (!keep.has(d.dataset.id)) d.remove();
+    for (const d of [...box.children, ...imgBox.children]) if (!keep.has(d.dataset.id)) d.remove();
     if (this.selected && this.selected.pid === pid) this.positionSelection();
   }
 
@@ -494,6 +542,203 @@ export class Editor {
     const rr = this.root.getBoundingClientRect();
     bar.style.left = clamp(r.left - rr.left, 8, rr.width - 300) + 'px';
     bar.style.top = Math.max(r.top - rr.top - 48, 60) + 'px';
+  }
+
+  // ---------- 올가미 선택 ----------
+  drawLassoPath() {
+    const a = this.active;
+    if (!a || !a.live) return;
+    const ctx = a.live.getContext('2d');
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, a.live.width, a.live.height);
+    ctx.setTransform(a.live._rs, 0, 0, a.live._rs, 0, 0);
+    const p = a.path;
+    ctx.beginPath();
+    ctx.moveTo(p[0], p[1]);
+    for (let i = 2; i < p.length; i += 2) ctx.lineTo(p[i], p[i + 1]);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(232,87,74,0.06)';
+    ctx.fill();
+    ctx.setLineDash([5 / this.scale * 1.5, 4 / this.scale * 1.5]);
+    ctx.lineWidth = 1.5 / this.scale;
+    ctx.strokeStyle = '#e8574a';
+    ctx.stroke();
+  }
+
+  lassoSelect(pid, path) {
+    const pi = this.ink[pid];
+    if (!pi || path.length < 6) return;
+    const strokes = new Set(), texts = new Set(), images = new Set();
+    for (const s of pi.strokes) {
+      const n = s.p.length / 3;
+      let inside = 0;
+      for (let i = 0; i < n; i++) if (inPoly(s.p[i * 3], s.p[i * 3 + 1], path)) inside++;
+      if (inside && inside >= n * 0.5) strokes.add(s.id);
+    }
+    const el = this.pageEls.get(pid);
+    for (const t of pi.texts) {
+      const d = el.querySelector(`[data-id="${t.id}"]`);
+      const h = d ? d.offsetHeight / this.scale : t.s * 1.3;
+      if (inPoly(t.x + t.w / 2, t.y + h / 2, path) || inPoly(t.x + 4, t.y + h / 2, path)) texts.add(t.id);
+    }
+    for (const im of pi.images) if (inPoly(im.x + im.w / 2, im.y + im.h / 2, path)) images.add(im.id);
+    if (!strokes.size && !texts.size && !images.size) return;
+    this.lassoSel = { pid, strokes, texts, images, box: null };
+    this.updateLassoBox();
+  }
+
+  lassoItems() {
+    const L = this.lassoSel;
+    const pi = this.ink[L.pid] || emptyPage();
+    return {
+      strokes: pi.strokes.filter(s => L.strokes.has(s.id)),
+      texts: pi.texts.filter(t => L.texts.has(t.id)),
+      images: pi.images.filter(m => L.images.has(m.id)),
+    };
+  }
+
+  lassoClone() { return JSON.parse(JSON.stringify(this.lassoItems())); }
+
+  computeLassoBox() {
+    const { strokes, texts, images } = this.lassoItems();
+    let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+    const add = (ax, ay, bx, by) => { x0 = Math.min(x0, ax); y0 = Math.min(y0, ay); x1 = Math.max(x1, bx); y1 = Math.max(y1, by); };
+    for (const s of strokes) for (let i = 0; i < s.p.length; i += 3) add(s.p[i] - s.w / 2, s.p[i + 1] - s.w / 2, s.p[i] + s.w / 2, s.p[i + 1] + s.w / 2);
+    const el = this.pageEls.get(this.lassoSel.pid);
+    for (const t of texts) {
+      const d = el.querySelector(`[data-id="${t.id}"]`);
+      add(t.x, t.y, t.x + t.w, t.y + (d ? d.offsetHeight / this.scale : t.s * 1.3));
+    }
+    for (const m of images) add(m.x, m.y, m.x + m.w, m.y + m.h);
+    if (x0 === Infinity) return null;
+    const pad = 6;
+    return { x: x0 - pad, y: y0 - pad, w: x1 - x0 + pad * 2, h: y1 - y0 + pad * 2 };
+  }
+
+  updateLassoBox() {
+    const L = this.lassoSel;
+    const bar = this.root.querySelector('.lassobar');
+    if (!L) { bar.hidden = true; return; }
+    L.box = this.computeLassoBox();
+    if (!L.box) return this.clearLasso();
+    const el = this.pageEls.get(L.pid);
+    let box = el.querySelector('.lasso-box');
+    if (!box) {
+      box = document.createElement('div');
+      box.className = 'lasso-box';
+      box.innerHTML = '<div class="lasso-handle"></div>';
+      el.appendChild(box);
+    }
+    const s = this.scale;
+    Object.assign(box.style, { left: L.box.x * s + 'px', top: L.box.y * s + 'px', width: L.box.w * s + 'px', height: L.box.h * s + 'px' });
+    const n = L.strokes.size + L.texts.size + L.images.size;
+    bar.querySelector('.lasso-count').textContent = `${n}개 선택`;
+    bar.hidden = false;
+    this.positionLassoBar();
+  }
+
+  positionLassoBar() {
+    const L = this.lassoSel;
+    const bar = this.root.querySelector('.lassobar');
+    if (!L) return;
+    const box = this.pageEls.get(L.pid).querySelector('.lasso-box');
+    if (!box) return;
+    const r = box.getBoundingClientRect();
+    const rr = this.root.getBoundingClientRect();
+    bar.style.left = clamp(r.left - rr.left, 8, Math.max(8, rr.width - bar.offsetWidth - 8)) + 'px';
+    const above = r.top - rr.top - bar.offsetHeight - 10;
+    bar.style.top = (above > 60 ? above : Math.min(r.bottom - rr.top + 10, rr.height - bar.offsetHeight - 50)) + 'px';
+  }
+
+  clearLasso() {
+    const L = this.lassoSel;
+    if (!L) return;
+    const el = this.pageEls.get(L.pid);
+    const box = el && el.querySelector('.lasso-box');
+    if (box) box.remove();
+    this.lassoSel = null;
+    this.root.querySelector('.lassobar').hidden = true;
+  }
+
+  // 이동(dx,dy) 또는 크기 조절(오른쪽 아래 손잡이)을 원본 복사본 기준으로 적용
+  lassoTransform(a, dx, dy) {
+    const cur = this.lassoItems();
+    const o = a.orig;
+    let fx, k = 1;
+    if (a.kind === 'lasso-move') {
+      fx = (x, y) => [r1(x + dx), r1(y + dy)];
+    } else {
+      const b = a.box0;
+      k = Math.max(0.15, (b.w + dx) / b.w);
+      fx = (x, y) => [r1(b.x + (x - b.x) * k), r1(b.y + (y - b.y) * k)];
+    }
+    cur.strokes.forEach((s, i) => {
+      const src = o.strokes[i];
+      const p = src.p.slice();
+      for (let j = 0; j < p.length; j += 3) { const [nx, ny] = fx(p[j], p[j + 1]); p[j] = nx; p[j + 1] = ny; }
+      s.p = p;
+      s.w = r1(src.w * k) || src.w;
+    });
+    cur.texts.forEach((t, i) => {
+      const src = o.texts[i];
+      [t.x, t.y] = fx(src.x, src.y);
+      t.s = Math.max(4, Math.round(src.s * k * 10) / 10);
+      t.w = r1(src.w * k);
+    });
+    cur.images.forEach((m, i) => {
+      const src = o.images[i];
+      [m.x, m.y] = fx(src.x, src.y);
+      m.w = r1(src.w * k);
+      m.h = r1(src.h * k);
+    });
+    if (!a.raf) a.raf = requestAnimationFrame(() => {
+      a.raf = 0;
+      this.drawInkCanvas(a.pageEl, this.pageOf(a.pid));
+      this.renderItems(a.pid);
+      this.updateLassoBox();
+    });
+  }
+
+  lassoColor(color) {
+    const L = this.lassoSel;
+    if (!L) return;
+    const before = this.snap(L.pid);
+    const { strokes, texts } = this.lassoItems();
+    strokes.forEach(s => { if (s.t !== 'hl') s.c = color; });
+    texts.forEach(t => { t.c = color; });
+    this.refreshPage(L.pid);
+    this.commit(L.pid, before);
+  }
+
+  lassoDuplicate() {
+    const L = this.lassoSel;
+    if (!L) return;
+    const before = this.snap(L.pid);
+    const pi = this.pageInk(L.pid);
+    const copy = this.lassoClone();
+    const off = 20;
+    const strokes = new Set(), texts = new Set(), images = new Set();
+    copy.strokes.forEach(s => { s.id = uid(); for (let j = 0; j < s.p.length; j += 3) { s.p[j] += off; s.p[j + 1] += off; } pi.strokes.push(s); strokes.add(s.id); });
+    copy.texts.forEach(t => { t.id = uid(); t.x += off; t.y += off; pi.texts.push(t); texts.add(t.id); });
+    copy.images.forEach(m => { m.id = uid(); m.x += off; m.y += off; pi.images.push(m); images.add(m.id); });
+    this.lassoSel = { pid: L.pid, strokes, texts, images, box: null };
+    this.refreshPage(L.pid);
+    this.updateLassoBox();
+    this.commit(L.pid, before);
+  }
+
+  lassoDelete() {
+    const L = this.lassoSel;
+    if (!L) return;
+    const before = this.snap(L.pid);
+    const pi = this.pageInk(L.pid);
+    pi.strokes = pi.strokes.filter(s => !L.strokes.has(s.id));
+    pi.texts = pi.texts.filter(t => !L.texts.has(t.id));
+    pi.images = pi.images.filter(m => !L.images.has(m.id));
+    const pid = L.pid;
+    this.clearLasso();
+    this.refreshPage(pid);
+    this.commit(pid, before);
   }
 
   deleteSelected() {
@@ -629,7 +874,7 @@ export class Editor {
       const item = e.target.closest('.item.text');
       if (item && this.tools.tool === 'select') this.editText(item.closest('.page').dataset.pid, item.dataset.id);
     });
-    sc.addEventListener('scroll', () => { this.updatePageLabel(); this.positionSelection(); }, { passive: true });
+    sc.addEventListener('scroll', () => { this.updatePageLabel(); this.positionSelection(); this.positionLassoBar(); }, { passive: true });
     // iPad 사파리에서 펜으로 쓸 때 화면이 끌려가거나 돋보기가 뜨는 것을 막음
     sc.addEventListener('touchmove', e => { if (this.active) e.preventDefault(); }, { passive: false });
 
@@ -700,6 +945,16 @@ export class Editor {
     bar.addEventListener('pointerdown', e => { if (this.editing) e.preventDefault(); });
     bar.addEventListener('mousedown', e => { if (this.editing) e.preventDefault(); });
     R.querySelector('[data-act="hide-ui"]').onclick = () => this.setUiHidden(true);
+    const lb = R.querySelector('.lassobar');
+    lb.querySelectorAll('[data-lcolor]').forEach(b => { b.onclick = () => this.lassoColor(b.dataset.lcolor); });
+    lb.querySelector('[data-act="lasso-dup"]').onclick = () => this.lassoDuplicate();
+    lb.querySelector('[data-act="lasso-del"]').onclick = () => this.lassoDelete();
+    R.querySelector('[data-act="export"]').onclick = async () => {
+      R.querySelector('.more-menu').hidden = true;
+      this.finishEditing();
+      await this.flush();
+      this.onExport(this.note.id);
+    };
     R.querySelector('[data-act="show-ui"]').onclick = () => this.setUiHidden(false);
     R.querySelector('[data-act="undo-float"]').onclick = () => this.undo();
 
@@ -710,9 +965,10 @@ export class Editor {
       if (mod && e.key.toLowerCase() === 'z' && !editing) { e.preventDefault(); e.shiftKey ? this.redo() : this.undo(); }
       else if (mod && e.key.toLowerCase() === 'y' && !editing) { e.preventDefault(); this.redo(); }
       else if ((e.key === 'Backspace' || e.key === 'Delete') && this.selected && !editing) { e.preventDefault(); this.deleteSelected(); }
-      else if (e.key === 'Escape') { if (editing) document.activeElement.blur(); this.deselect(); }
+      else if ((e.key === 'Backspace' || e.key === 'Delete') && this.lassoSel && !editing) { e.preventDefault(); this.lassoDelete(); }
+      else if (e.key === 'Escape') { if (editing) document.activeElement.blur(); this.deselect(); this.clearLasso(); }
       else if (!editing && !mod) {
-        const map = { p: 'pen', h: 'hl', e: 'eraser', t: 'text', v: 'select' };
+        const map = { p: 'pen', h: 'hl', e: 'eraser', l: 'lasso', t: 'text', v: 'select' };
         if (map[e.key]) this.setTool(map[e.key]);
         else if (e.key === 'f') this.setUiHidden(this.root.dataset.ui !== 'hidden');
       }
@@ -753,6 +1009,27 @@ export class Editor {
       const nearCorner = e.clientX > r.right - 28 && e.clientY > r.bottom - 28;
       this.active = { kind: nearCorner ? 'resize' : 'move', pid, pageEl, it, x0: x, y0: y, orig: Object.assign({}, it), before: this.snap(pid), id: e.pointerId };
       try { this.scroller.setPointerCapture(e.pointerId); } catch {}
+      return;
+    }
+
+    if (tool === 'lasso') {
+      // 선택 상자 안을 누르면 이동/크기 조절 (손가락으로도 가능)
+      const boxEl = e.target.closest('.lasso-box');
+      if (boxEl && this.lassoSel && this.lassoSel.pid === pid) {
+        e.preventDefault();
+        const [x, y] = this.pagePoint(pageEl, e);
+        const handle = !!e.target.closest('.lasso-handle');
+        this.active = { kind: handle ? 'lasso-resize' : 'lasso-move', pid, pageEl, x0: x, y0: y, orig: this.lassoClone(), box0: Object.assign({}, this.lassoSel.box), before: this.snap(pid), id: e.pointerId };
+        try { this.scroller.setPointerCapture(e.pointerId); } catch {}
+        return;
+      }
+      if (this.tools.penOnly && e.pointerType === 'touch') return;
+      e.preventDefault();
+      this.finishEditing();
+      this.clearLasso();
+      try { this.scroller.setPointerCapture(e.pointerId); } catch {}
+      const [x, y] = this.pagePoint(pageEl, e);
+      this.active = { kind: 'lasso', pid, pageEl, live: this.attachLive(pageEl), path: [x, y], id: e.pointerId };
       return;
     }
 
@@ -810,6 +1087,14 @@ export class Editor {
       if (this.eraseAt(x, y, a.lx, a.ly)) this.drawInkCanvas(a.pageEl, this.pageOf(a.pid));
       a.lx = x; a.ly = y;
       this.drawEraserCursor(x, y);
+    } else if (a.kind === 'lasso') {
+      const [x, y] = this.pagePoint(a.pageEl, e);
+      const p = a.path;
+      if (Math.abs(x - p[p.length - 2]) + Math.abs(y - p[p.length - 1]) > 2) p.push(r1(x), r1(y));
+      if (!a.raf) a.raf = requestAnimationFrame(() => { a.raf = 0; this.drawLassoPath(); });
+    } else if (a.kind === 'lasso-move' || a.kind === 'lasso-resize') {
+      const [x, y] = this.pagePoint(a.pageEl, e);
+      this.lassoTransform(a, x - a.x0, y - a.y0);
     } else if (a.kind === 'move' || a.kind === 'resize') {
       const [x, y] = this.pagePoint(a.pageEl, e);
       const dx = x - a.x0, dy = y - a.y0;
@@ -842,6 +1127,12 @@ export class Editor {
       }
     } else if (a.kind === 'erase') {
       this.commit(a.pid, a.before);
+    } else if (a.kind === 'lasso') {
+      this.lassoSelect(a.pid, a.path);
+    } else if (a.kind === 'lasso-move' || a.kind === 'lasso-resize') {
+      this.drawInkCanvas(a.pageEl, this.pageOf(a.pid));
+      this.commit(a.pid, a.before);
+      this.updateLassoBox();
     } else {
       this.commit(a.pid, a.before);
     }
@@ -940,6 +1231,7 @@ export class Editor {
 
   setTool(t) {
     this.finishEditing();
+    if (t !== 'lasso') this.clearLasso();
     if (t !== 'select') this.deselect();
     this.tools.tool = t;
     this.saveTools();
@@ -1108,13 +1400,7 @@ export class Editor {
     ctx.setTransform(k, 0, 0, k, 0, 0);
     drawPageInk(ctx, this.ink[pg.id]);
     const pi = this.ink[pg.id];
-    if (pi) {
-      for (const t of pi.texts) {
-        ctx.fillStyle = t.c;
-        ctx.font = `${t.s}px -apple-system, sans-serif`;
-        t.text.split('\n').forEach((line, j) => ctx.fillText(line, t.x, t.y + t.s * (j + 1)));
-      }
-    }
+    if (pi) drawTexts(ctx, pi.texts);
     return c.toDataURL('image/jpeg', 0.7);
   }
 }

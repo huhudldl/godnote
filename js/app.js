@@ -21,6 +21,7 @@ function toast(msg, ms = 2600) {
 // ---------- 편집기 ----------
 const editor = new Editor(editorEl, {
   toast,
+  onExport: id => exportNote(id),
   onSaved: () => {
     editor.setSaveState(drive.hasValidToken() ? '기기에 저장됨 · 드라이브 대기' : '기기에 저장됨', 'ok');
     // 마지막 동작 후 약 3.5초(로컬 저장 0.5초 + 3초) 뒤 드라이브에 올림
@@ -49,6 +50,10 @@ async function openNote(id) {
 }
 
 // ---------- 서재 ----------
+const FOLDERS_ID = '__folders__';   // 폴더 목록도 노트처럼 동기화되는 특별한 기록
+const TRASH_DAYS = 30;
+let view = localStorage.getItem('godnote.view') || 'all';   // all | trash | 폴더 id
+
 function fmtDate(t) {
   const d = new Date(t);
   const now = new Date();
@@ -56,21 +61,122 @@ function fmtDate(t) {
   return d.toLocaleDateString('ko-KR', { year: d.getFullYear() === now.getFullYear() ? undefined : 'numeric', month: 'long', day: 'numeric' });
 }
 
+async function getFolders() {
+  const rec = await db.getNote(FOLDERS_ID);
+  return rec && rec.folders ? rec.folders : [];
+}
+async function saveFolders(folders) {
+  await db.putNote({ id: FOLDERS_ID, kind: 'folders', name: '폴더 목록', folders, updatedAt: Date.now() });
+  scheduleSync(500);
+}
+const isNote = n => n.id !== FOLDERS_ID && n.kind !== 'folders' && !n.deleted;
+
+// 휴지통에서 30일이 지난 노트는 완전히 삭제
+async function purgeTrash() {
+  const limit = Date.now() - TRASH_DAYS * 86400_000;
+  for (const n of await db.allNotes()) {
+    if (isNote(n) && n.trashedAt && n.trashedAt < limit) await deleteForever(n);
+  }
+}
+async function deleteForever(note) {
+  await db.delPdf(note.id);
+  await db.delInk(note.id);
+  await db.putNote({ id: note.id, name: note.name, deleted: true, updatedAt: Date.now() });
+}
+
+function svgIcon(name) {
+  const p = {
+    dots: '<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>',
+    folder: '<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>',
+    trash: '<path d="M4 7h16M10 11v6M14 11v6M5 7l1 12a2 2 0 0 0 2 2h8a2 2 0 0 0 2-2l1-12M9 7V4h6v3"/>',
+    plus: '<path d="M12 5v14M5 12h14"/>',
+  }[name];
+  return `<svg viewBox="0 0 24 24">${p}</svg>`;
+}
+
 async function renderLibrary() {
-  const notes = (await db.allNotes()).filter(n => !n.deleted).sort((a, b) => b.updatedAt - a.updatedAt);
+  const all = await db.allNotes();
+  const folders = (all.find(n => n.id === FOLDERS_ID) || {}).folders || [];
+  const folderIds = new Set(folders.map(f => f.id));
+  if (view !== 'all' && view !== 'trash' && !folderIds.has(view)) view = 'all';
+  localStorage.setItem('godnote.view', view);
+  const notes = all.filter(isNote);
+  const live = notes.filter(n => !n.trashedAt);
+  const trashed = notes.filter(n => n.trashedAt);
+
+  // 폴더 줄
+  const bar = $('#folders');
+  bar.innerHTML = '';
+  const chip = (id, label, count, icon) => {
+    const b = document.createElement('button');
+    b.className = 'chip' + (view === id ? ' on' : '') + (id === 'trash' ? ' trash' : '');
+    b.innerHTML = (icon ? svgIcon(icon) : '') + `<span></span>` + (count != null ? `<em>${count}</em>` : '');
+    b.querySelector('span').textContent = label;
+    b.onclick = () => {
+      if (view === id && folderIds.has(id)) return folderMenu(folders.find(f => f.id === id), b);
+      view = id;
+      renderLibrary();
+    };
+    bar.appendChild(b);
+  };
+  chip('all', '전체', live.length);
+  for (const f of folders) chip(f.id, f.name, live.filter(n => n.folderId === f.id).length, 'folder');
+  const add = document.createElement('button');
+  add.className = 'chip add';
+  add.innerHTML = svgIcon('plus') + '<span>새 폴더</span>';
+  add.onclick = async () => {
+    const name = prompt('새 폴더 이름');
+    if (!name || !name.trim()) return;
+    const f = { id: uid(), name: name.trim() };
+    await saveFolders([...folders, f]);
+    view = f.id;
+    renderLibrary();
+  };
+  bar.appendChild(add);
+  const sp = document.createElement('div');
+  sp.className = 'spacer';
+  bar.appendChild(sp);
+  chip('trash', '휴지통', trashed.length || null, 'trash');
+
+  // 노트 목록
+  let list;
+  if (view === 'trash') list = trashed.sort((a, b) => b.trashedAt - a.trashedAt);
+  else if (view === 'all') list = live;
+  else list = live.filter(n => n.folderId === view);
+  if (view !== 'trash') list.sort((a, b) => b.updatedAt - a.updatedAt);
+
+  $('.actions').hidden = view === 'trash';
+  $('#trash-head').hidden = view !== 'trash';
+  $('#empty-trash').disabled = !trashed.length;
   const grid = $('#grid');
   grid.innerHTML = '';
-  $('#empty').hidden = notes.length > 0;
-  for (const n of notes) {
+  const empty = $('#empty');
+  empty.hidden = list.length > 0;
+  empty.querySelector('p').textContent = view === 'trash' ? '휴지통이 비어 있습니다.' : '아직 노트가 없습니다.';
+  empty.querySelector('.muted').hidden = view === 'trash';
+  const folderName = id => (folders.find(f => f.id === id) || {}).name;
+  for (const n of list) {
     const card = document.createElement('div');
-    card.className = 'card';
+    card.className = 'card' + (view === 'trash' ? ' in-trash' : '');
     card.innerHTML = `<div class="cover"></div><div class="name"></div><div class="date"></div>
-      <button class="card-menu" aria-label="메뉴"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></svg></button>`;
+      <button class="card-menu" aria-label="메뉴">${svgIcon('dots')}</button>`;
     if (n.thumb) card.querySelector('.cover').style.backgroundImage = `url(${n.thumb})`;
     card.querySelector('.name').textContent = n.name;
-    card.querySelector('.date').textContent = `${fmtDate(n.updatedAt)} · ${n.pages.length}쪽`;
-    card.onclick = e => { if (!e.target.closest('.card-menu')) openNote(n.id); };
-    card.querySelector('.card-menu').onclick = e => { e.stopPropagation(); cardMenu(n, e.currentTarget); };
+    let info;
+    if (view === 'trash') {
+      const left = Math.max(0, TRASH_DAYS - Math.floor((Date.now() - n.trashedAt) / 86400_000));
+      info = `${left}일 후 완전 삭제`;
+    } else {
+      info = `${fmtDate(n.updatedAt)} · ${n.pages.length}쪽`;
+      if (view === 'all' && folderName(n.folderId)) info += ` · ${folderName(n.folderId)}`;
+    }
+    card.querySelector('.date').textContent = info;
+    card.onclick = e => {
+      if (e.target.closest('.card-menu')) return;
+      if (view === 'trash') return cardMenu(n, card.querySelector('.card-menu'), folders);
+      openNote(n.id);
+    };
+    card.querySelector('.card-menu').onclick = e => { e.stopPropagation(); cardMenu(n, e.currentTarget, folders); };
     grid.appendChild(card);
   }
 }
@@ -78,15 +184,46 @@ async function renderLibrary() {
 function closePopups() { document.querySelectorAll('.popup').forEach(p => p.remove()); }
 document.addEventListener('pointerdown', e => { if (!e.target.closest('.popup')) closePopups(); });
 
-function cardMenu(note, anchor) {
+function popup(anchor, html) {
   closePopups();
   const m = document.createElement('div');
   m.className = 'popup';
-  m.innerHTML = '<button data-a="rename">이름 바꾸기</button><button data-a="dup">복제</button><button data-a="del" class="danger">삭제</button>';
+  m.innerHTML = html;
   document.body.appendChild(m);
   const r = anchor.getBoundingClientRect();
-  m.style.top = Math.min(r.bottom + 4, innerHeight - m.offsetHeight - 8) + 'px';
+  m.style.top = Math.max(8, Math.min(r.bottom + 4, innerHeight - m.offsetHeight - 8)) + 'px';
   m.style.left = Math.max(8, Math.min(r.right - m.offsetWidth, innerWidth - m.offsetWidth - 8)) + 'px';
+  return m;
+}
+
+function folderMenu(folder, anchor) {
+  const m = popup(anchor, '<button data-a="rename">폴더 이름 바꾸기</button><button data-a="del" class="danger">폴더 삭제</button>');
+  m.onclick = async e => {
+    const a = e.target.dataset.a;
+    if (!a) return;
+    closePopups();
+    const folders = await getFolders();
+    if (a === 'rename') {
+      const name = prompt('폴더 이름', folder.name);
+      if (!name || !name.trim()) return;
+      await saveFolders(folders.map(f => f.id === folder.id ? { ...f, name: name.trim() } : f));
+    } else {
+      if (!confirm(`'${folder.name}' 폴더를 삭제할까요?\n안에 있던 노트는 지워지지 않고 '전체'에 남습니다.`)) return;
+      for (const n of await db.allNotes()) {
+        if (isNote(n) && n.folderId === folder.id) { delete n.folderId; n.updatedAt = Date.now(); await db.putNote(n); }
+      }
+      await saveFolders(folders.filter(f => f.id !== folder.id));
+      view = 'all';
+    }
+    renderLibrary();
+  };
+}
+
+function cardMenu(note, anchor, folders) {
+  const html = note.trashedAt
+    ? '<button data-a="restore">복원</button><button data-a="forever" class="danger">완전히 삭제</button>'
+    : '<button data-a="rename">이름 바꾸기</button><button data-a="move">폴더로 이동</button><button data-a="dup">복제</button><button data-a="export">필기 포함 PDF로 내보내기</button><button data-a="del" class="danger">휴지통으로 이동</button>';
+  const m = popup(anchor, html);
   m.onclick = async e => {
     const a = e.target.dataset.a;
     if (!a) return;
@@ -97,24 +234,83 @@ function cardMenu(note, anchor) {
       note.name = name.trim();
       note.updatedAt = Date.now();
       await db.putNote(note);
+    } else if (a === 'move') {
+      return moveMenu(note, anchor, folders);
     } else if (a === 'dup') {
       const id = uid();
       const copy = Object.assign({}, note, { id, name: note.name + ' 사본', createdAt: Date.now(), updatedAt: Date.now() });
       if (note.hasPdf) await db.putPdf(id, await db.getPdf(note.id));
       await db.putInk(id, await db.getInk(note.id));
       await db.putNote(copy);
+    } else if (a === 'export') {
+      return exportNote(note.id);
     } else if (a === 'del') {
-      if (!confirm(`'${note.name}'을(를) 삭제할까요?\n동기화된 다른 기기와 구글 드라이브에서도 삭제됩니다.`)) return;
-      await db.delPdf(note.id);
-      await db.delInk(note.id);
-      await db.putNote({ id: note.id, name: note.name, deleted: true, updatedAt: Date.now() });
+      note.trashedAt = Date.now();
+      note.updatedAt = Date.now();
+      await db.putNote(note);
+      toast(`휴지통으로 옮겼습니다 (${TRASH_DAYS}일 동안 보관)`);
+    } else if (a === 'restore') {
+      delete note.trashedAt;
+      note.updatedAt = Date.now();
+      await db.putNote(note);
+      toast('노트를 복원했습니다');
+    } else if (a === 'forever') {
+      if (!confirm(`'${note.name}'을(를) 완전히 삭제할까요?\n모든 기기와 구글 드라이브에서 지워지며 되돌릴 수 없습니다.`)) return;
+      await deleteForever(note);
     }
     renderLibrary();
     scheduleSync(500);
   };
 }
 
+function moveMenu(note, anchor, folders) {
+  if (!folders.length) return toast("먼저 위쪽 '새 폴더'로 폴더를 만들어 주세요");
+  const items = [{ id: '', name: '폴더 없음' }, ...folders]
+    .map(f => `<button data-f="${f.id}">${f.id === (note.folderId || '') ? '✓ ' : ''}${f.name.replace(/</g, '&lt;')}</button>`).join('');
+  const m = popup(anchor, items);
+  m.onclick = async e => {
+    const b = e.target.closest('[data-f]');
+    if (!b) return;
+    closePopups();
+    if (b.dataset.f) note.folderId = b.dataset.f; else delete note.folderId;
+    note.updatedAt = Date.now();
+    await db.putNote(note);
+    renderLibrary();
+    scheduleSync(500);
+  };
+}
+
+$('#empty-trash').onclick = async () => {
+  const trashed = (await db.allNotes()).filter(n => isNote(n) && n.trashedAt);
+  if (!trashed.length) return;
+  if (!confirm(`휴지통의 노트 ${trashed.length}개를 완전히 삭제할까요?\n되돌릴 수 없습니다.`)) return;
+  for (const n of trashed) await deleteForever(n);
+  renderLibrary();
+  scheduleSync(500);
+};
+
+// ---------- PDF 내보내기 ----------
+async function exportNote(id) {
+  const note = await db.getNote(id);
+  if (!note) return;
+  try {
+    const { exportNotePdf, saveOrShare } = await import('./export.js');
+    const ink = await db.getInk(id);
+    const pdf = note.hasPdf ? await db.getPdf(id) : null;
+    const blob = await exportNotePdf(note, ink, pdf, (i, n) => toast(`PDF 만드는 중… ${i} / ${n}쪽`, 60000));
+    const name = note.name.replace(/[\\/:*?"<>|]/g, '_') + '.pdf';
+    const how = await saveOrShare(blob, name);
+    if (how === 'downloaded') toast(`'${name}'을(를) 다운로드 폴더에 저장했습니다`, 4000);
+    else if (how === 'shared') toast('PDF를 내보냈습니다');
+    else toast('내보내기를 취소했습니다');
+  } catch (e) {
+    console.error(e);
+    toast('PDF를 만들지 못했습니다: ' + e.message, 5000);
+  }
+}
+
 // ---------- PDF 불러오기 / 새 노트 ----------
+const currentFolder = () => (view !== 'all' && view !== 'trash' ? { folderId: view } : {});
 async function importPdf(file) {
   const buf = await file.arrayBuffer();
   const pdf = await pdfjsLib.getDocument({ data: new Uint8Array(buf.slice(0)) }).promise;
@@ -141,7 +337,7 @@ async function importPdf(file) {
   await db.putPdf(id, new Blob([buf], { type: 'application/pdf' }));
   await db.putInk(id, {});
   await db.putNote({
-    id, name: file.name.replace(/\.pdf$/i, ''), hasPdf: true, pages,
+    id, name: file.name.replace(/\.pdf$/i, ''), hasPdf: true, pages, ...currentFolder(),
     createdAt: now, updatedAt: now, thumb: c.toDataURL('image/jpeg', 0.7),
   });
   return id;
@@ -186,7 +382,7 @@ $('#new-blank').onclick = e => {
     const d = new Date(now);
     const pages = [{ id: uid(), w: 595, h: 842, pdf: null, bg }]; // A4
     await db.putInk(id, {});
-    await db.putNote({ id, name: `노트 ${d.getMonth() + 1}월 ${d.getDate()}일`, hasPdf: false, pages, createdAt: now, updatedAt: now });
+    await db.putNote({ id, name: `노트 ${d.getMonth() + 1}월 ${d.getDate()}일`, hasPdf: false, pages, createdAt: now, updatedAt: now, ...currentFolder() });
     openNote(id);
   };
 };
@@ -324,7 +520,7 @@ function renderAccount() {
 // ---------- 시작 ----------
 drive.init();
 if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
-renderLibrary();
+purgeTrash().then(renderLibrary);
 if (drive.hasValidToken()) runSync();
 
 // 앱으로 돌아오면 / 온라인이 되면 동기화

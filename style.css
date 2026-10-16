@@ -68,7 +68,7 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .sync-btn[data-status="offline"] .dot { background: var(--muted); }
 @keyframes pulse { 50% { opacity: .3; } }
 
-.actions { display: flex; gap: 10px; margin: 14px 0 20px; flex-wrap: wrap; }
+.actions { display: flex; gap: 10px; margin: 4px 0 20px; flex-wrap: wrap; }
 .big-btn {
   display: inline-flex; align-items: center; gap: 8px; height: 44px; padding: 0 18px;
   border-radius: 12px; border: 1px solid var(--line); background: var(--surface); font-weight: 600; cursor: pointer;
@@ -164,7 +164,8 @@ svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width:
 .editor[data-pen-only="0"][data-tool="pen"] .page,
 .editor[data-pen-only="0"][data-tool="hl"] .page,
 .editor[data-pen-only="0"][data-tool="eraser"] .page,
-.editor[data-pen-only="0"][data-tool="text"] .page { touch-action: none; }
+.editor[data-pen-only="0"][data-tool="text"] .page,
+.editor[data-pen-only="0"][data-tool="lasso"] .page { touch-action: none; }
 .editor[data-tool="pen"] .page, .editor[data-tool="hl"] .page { cursor: crosshair; }
 .editor[data-tool="text"] .page { cursor: text; }
 .editor[data-tool="eraser"] .page { cursor: cell; }
@@ -240,3 +241,39 @@ details summary { cursor: pointer; font-weight: 600; }
 .tool.on[data-tool="pen"]::after, .tool.on[data-tool="hl"]::after, .tool.on[data-tool="eraser"]::after, .tool.on[data-tool="text"]::after {
   content: ""; position: absolute; bottom: 3px; left: 50%; transform: translateX(-50%); width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: .6;
 }
+
+/* 올가미 선택 */
+.lasso-box {
+  position: absolute; border: 1.5px dashed var(--accent); border-radius: 6px; background: rgba(232,87,74,.05);
+  pointer-events: auto; cursor: move; touch-action: none; z-index: 3;
+}
+.lasso-handle {
+  position: absolute; right: -11px; bottom: -11px; width: 22px; height: 22px; border-radius: 50%;
+  background: #fff; border: 2px solid var(--accent); cursor: nwse-resize; box-shadow: 0 1px 4px rgba(0,0,0,.2);
+}
+.editor[data-tool="lasso"] .page { cursor: crosshair; }
+.lassobar { position: absolute; z-index: 20; display: flex; align-items: center; gap: 4px; padding: 4px 6px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 10px 30px rgba(0,0,0,.18); }
+.lassobar > button { border: 0; background: none; padding: 8px 12px; border-radius: 8px; font-weight: 600; }
+.lassobar > button:hover { background: rgba(127,127,127,.12); }
+.lasso-count { font-size: 12px; color: var(--muted); padding: 0 6px; white-space: nowrap; }
+.lasso-colors { display: flex; gap: 6px; padding: 0 6px; border-left: 1px solid var(--line); border-right: 1px solid var(--line); }
+.lasso-colors button { width: 24px; height: 24px; border-radius: 50%; border: 2px solid var(--surface); box-shadow: 0 0 0 1px var(--line); background: var(--c); padding: 0; }
+
+/* 폴더 줄 */
+.folders { display: flex; gap: 8px; margin: 12px 0 14px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; align-items: center; }
+.folders::-webkit-scrollbar { display: none; }
+.folders .spacer { flex: 1; min-width: 8px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 6px; height: 36px; padding: 0 14px; border-radius: 18px; flex: none;
+  border: 1px solid var(--line); background: var(--surface); font-size: 14px; white-space: nowrap;
+}
+.chip svg { width: 17px; height: 17px; }
+.chip em { font-style: normal; font-size: 12px; color: var(--muted); }
+.chip.on { background: var(--text); color: var(--bg); border-color: var(--text); }
+.chip.on em { color: inherit; opacity: .7; }
+.chip.add { border-style: dashed; color: var(--muted); }
+.chip.on:not(.trash):not([data-all])::after { content: "⌄"; margin-left: -2px; opacity: .6; }
+.trash-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 0 0 18px; flex-wrap: wrap; }
+.trash-head p { margin: 0; }
+.card.in-trash .cover { opacity: .55; filter: grayscale(.5); }

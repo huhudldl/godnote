@@ -28,6 +28,11 @@
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
     </button>
   </header>
+  <nav id="folders" class="folders" aria-label="폴더"></nav>
+  <div id="trash-head" class="trash-head" hidden>
+    <p class="muted small">휴지통의 노트는 30일 뒤 자동으로 완전히 삭제됩니다. 노트를 누르면 복원할 수 있습니다.</p>
+    <button id="empty-trash" class="btn">휴지통 비우기</button>
+  </div>
   <div class="actions">
     <label class="big-btn primary">
       <svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 12v6M9 15h6"/></svg>
@@ -65,6 +70,9 @@
       <button class="tool" data-tool="eraser" title="지우개 (E)" aria-label="지우개">
         <svg viewBox="0 0 24 24"><path d="M7 20h13M4.5 13.5l9-9a2 2 0 0 1 2.8 0l3.2 3.2a2 2 0 0 1 0 2.8L12 18H8.5l-4-4a.5.5 0 0 1 0-.5z"/><path d="M9 9l6 6"/></svg>
       </button>
+      <button class="tool" data-tool="lasso" title="올가미 선택 (L)" aria-label="올가미">
+        <svg viewBox="0 0 24 24"><path d="M7 17.5C4.6 16.3 3 14.3 3 12c0-4.4 4-8 9-8s9 3.6 9 8-4 8-9 8c-1 0-2-.1-2.9-.4" stroke-dasharray="3 2.6"/><circle cx="7.5" cy="19" r="1.6"/></svg>
+      </button>
       <button class="tool" data-tool="text" title="텍스트 (T)" aria-label="텍스트">
         <svg viewBox="0 0 24 24"><path d="M5 6V4h14v2M12 4v16M9 20h6"/></svg>
       </button>
@@ -88,6 +96,7 @@
   </header>
   <div class="tool-options" hidden></div>
   <div class="more-menu" hidden>
+    <button data-act="export">필기 포함 PDF로 내보내기</button>
     <button data-act="add-page">현재 페이지 뒤에 빈 페이지 추가</button>
     <label class="menu-row">새 페이지 종이
       <select>
@@ -108,6 +117,18 @@
     </div>
     <button data-act="edit">편집</button>
     <button data-act="delete" class="danger">삭제</button>
+  </div>
+  <div class="lassobar" hidden>
+    <span class="lasso-count"></span>
+    <div class="lasso-colors">
+      <button data-lcolor="#1a1a1a" style="--c:#1a1a1a" aria-label="검정"></button>
+      <button data-lcolor="#1f5fd6" style="--c:#1f5fd6" aria-label="파랑"></button>
+      <button data-lcolor="#d63a2f" style="--c:#d63a2f" aria-label="빨강"></button>
+      <button data-lcolor="#1f9d55" style="--c:#1f9d55" aria-label="초록"></button>
+      <button data-lcolor="#8e44ad" style="--c:#8e44ad" aria-label="보라"></button>
+    </div>
+    <button data-act="lasso-dup">복제</button>
+    <button data-act="lasso-del" class="danger">삭제</button>
   </div>
   <div class="float-bar" hidden>
     <button data-act="undo-float" aria-label="실행 취소"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg></button>
