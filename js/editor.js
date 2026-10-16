@@ -16,6 +16,7 @@ const DEFAULT_TOOLS = {
   penOnly: false,
   shapeSnap: true,   // 선 끝에서 잠깐 멈추면 직선·원·사각형으로 보정
   favs: [],          // 즐겨찾는 펜 [{ t, c, w }]
+  pillPos: 'bottom', // 알약 툴바 위치: bottom | top
 };
 
 const r1 = v => Math.round(v * 10) / 10;
@@ -237,6 +238,7 @@ export class Editor {
     this.resizeObs = new ResizeObserver(() => { if (this.note) this.layout(true); });
     this.resizeObs.observe(this.scroller);
     this.panel = new PagePanel(this);
+    this.bindPillGrip();
     this.search = new SearchBar(this);
   }
 
@@ -1584,6 +1586,54 @@ export class Editor {
     o.querySelectorAll('[data-delfav]').forEach(b => b.onclick = () => { this.tools.favs.splice(Number(b.dataset.delfav), 1); this.afterOpt(); });
   }
 
+  // 알약 툴바의 빠른 색 3개 (펜·형광펜·텍스트)
+  renderQuickColors() {
+    const box = this.root.querySelector('.quick-colors');
+    const t = this.tools.tool;
+    const sets = { pen: ['#1a1a1a', '#1f5fd6', '#d63a2f'], text: ['#1a1a1a', '#1f5fd6', '#d63a2f'], hl: ['#ffe14d', '#7ee08a', '#ff8fc8'] };
+    const colors = sets[t];
+    if (!colors) { box.innerHTML = ''; return; }
+    const opt = t === 'hl' ? this.tools.hl : this.tools.pen;
+    box.innerHTML = colors.map(c => `<button class="qc${opt.color === c ? ' on' : ''}" data-qc="${c}" style="--c:${c}" aria-label="색 ${c}"></button>`).join('');
+    box.querySelectorAll('[data-qc]').forEach(b => b.onclick = () => { opt.color = b.dataset.qc; this.afterOpt(); });
+  }
+
+  // 알약 툴바 손잡이: 끌어서 위/아래로, 그냥 누르면 위↔아래 전환
+  bindPillGrip() {
+    const pill = this.root.querySelector('.tool-pill');
+    const grip = pill.querySelector('.pill-grip');
+    let drag = null;
+    grip.addEventListener('pointerdown', e => {
+      e.preventDefault();
+      try { grip.setPointerCapture(e.pointerId); } catch {}
+      const r = pill.getBoundingClientRect();
+      drag = { y0: e.clientY, top0: r.top - this.root.getBoundingClientRect().top, moved: false };
+    });
+    grip.addEventListener('pointermove', e => {
+      if (!drag) return;
+      const dy = e.clientY - drag.y0;
+      if (Math.abs(dy) > 6) drag.moved = true;
+      if (!drag.moved) return;
+      pill.classList.add('dragging');
+      pill.style.top = drag.top0 + dy + 'px';
+      pill.style.bottom = 'auto';
+    });
+    const end = e => {
+      if (!drag) return;
+      const rr = this.root.getBoundingClientRect();
+      const top = drag.moved ? e.clientY - rr.top < rr.height / 2 : this.tools.pillPos !== 'top';
+      drag = null;
+      pill.classList.remove('dragging');
+      pill.style.top = '';
+      pill.style.bottom = '';
+      this.tools.pillPos = top ? 'top' : 'bottom';
+      this.saveTools();
+      this.updateUi();
+    };
+    grip.addEventListener('pointerup', end);
+    grip.addEventListener('pointercancel', end);
+  }
+
   // 도구 막대의 즐겨찾는 펜 버튼
   renderFavs() {
     const box = this.root.querySelector('.favs');
@@ -1618,6 +1668,8 @@ export class Editor {
     R.querySelector('[data-act="pen-only"]').classList.toggle('on', this.tools.penOnly);
     R.dataset.tool = t;
     R.dataset.penOnly = this.tools.penOnly ? '1' : '0';
+    R.dataset.pill = this.tools.pillPos === 'top' ? 'top' : 'bottom';
+    this.renderQuickColors();
     this.renderFavs();
     this.updatePastePill();
     this.updateUndoUi();

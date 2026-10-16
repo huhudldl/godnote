@@ -64,6 +64,21 @@
       </button>
       <span class="title"></span>
     </div>
+    <div class="tb-right">
+      <button class="icon-btn" data-act="search" title="노트에서 찾기 (⌘F)" aria-label="찾기"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg></button>
+      <button class="icon-btn" data-act="undo" title="실행 취소" aria-label="실행 취소"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg></button>
+      <button class="icon-btn" data-act="redo" title="다시 실행" aria-label="다시 실행"><svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/></svg></button>
+      <button class="icon-btn" data-act="pen-only" title="손가락 필기 끄기 (애플펜슬로만 필기, 손가락은 스크롤)" aria-label="손가락 필기 끄기">
+        <svg viewBox="0 0 24 24"><path d="M9 12V5.5a1.5 1.5 0 0 1 3 0V11m0-1.5a1.5 1.5 0 0 1 3 0V12m0-1a1.5 1.5 0 0 1 3 0v4a6 6 0 0 1-6 6h-.5a6 6 0 0 1-5-2.7l-2.2-3.6a1.5 1.5 0 0 1 2.5-1.6L9 15"/><path d="M3 3l18 18" class="slash"/></svg>
+      </button>
+      <button class="icon-btn" data-act="hide-ui" title="메뉴 숨기기 (F)" aria-label="메뉴 숨기기"><svg viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg></button>
+      <button class="icon-btn" data-act="more" aria-label="더보기"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></svg></button>
+    </div>
+  </header>
+  <div class="tool-pill">
+    <button class="pill-grip" aria-label="툴바 위치 옮기기 (위/아래)" title="끌어서 위·아래로 옮기기">
+      <svg viewBox="0 0 24 24"><circle cx="9" cy="6" r="1.2"/><circle cx="15" cy="6" r="1.2"/><circle cx="9" cy="12" r="1.2"/><circle cx="15" cy="12" r="1.2"/><circle cx="9" cy="18" r="1.2"/><circle cx="15" cy="18" r="1.2"/></svg>
+    </button>
     <div class="tb-tools">
       <button class="tool" data-tool="pen" title="펜 (P)" aria-label="펜">
         <svg viewBox="0 0 24 24"><path d="M4 20l1-5L16 4l4 4L9 19z"/><path class="fillc" d="M4 20l1-5 4 4z"/></svg>
@@ -86,20 +101,11 @@
       <button class="tool" data-tool="select" title="선택·이동 (V)" aria-label="선택">
         <svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 2-2 6z"/></svg>
       </button>
+      <div class="quick-colors"></div>
       <div class="favs" hidden></div>
       <input id="image-input" type="file" accept="image/*" hidden>
     </div>
-    <div class="tb-right">
-      <button class="icon-btn" data-act="search" title="노트에서 찾기 (⌘F)" aria-label="찾기"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg></button>
-      <button class="icon-btn" data-act="undo" title="실행 취소" aria-label="실행 취소"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg></button>
-      <button class="icon-btn" data-act="redo" title="다시 실행" aria-label="다시 실행"><svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/></svg></button>
-      <button class="icon-btn" data-act="pen-only" title="손가락 필기 끄기 (애플펜슬로만 필기, 손가락은 스크롤)" aria-label="손가락 필기 끄기">
-        <svg viewBox="0 0 24 24"><path d="M9 12V5.5a1.5 1.5 0 0 1 3 0V11m0-1.5a1.5 1.5 0 0 1 3 0V12m0-1a1.5 1.5 0 0 1 3 0v4a6 6 0 0 1-6 6h-.5a6 6 0 0 1-5-2.7l-2.2-3.6a1.5 1.5 0 0 1 2.5-1.6L9 15"/><path d="M3 3l18 18" class="slash"/></svg>
-      </button>
-      <button class="icon-btn" data-act="hide-ui" title="메뉴 숨기기 (F)" aria-label="메뉴 숨기기"><svg viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg></button>
-      <button class="icon-btn" data-act="more" aria-label="더보기"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></svg></button>
-    </div>
-  </header>
+  </div>
   <div class="tool-options" hidden></div>
   <div class="more-menu" hidden>
     <button data-act="export">필기 포함 PDF로 내보내기</button>
@@ -162,13 +168,12 @@
     <div class="pp-list"></div>
   </aside>
   <div class="statusbar">
-    <span class="page-label"></span>
+    <div class="status-left"><span class="page-label"></span><span class="save-state"></span></div>
     <div class="zoom">
       <button data-act="zoom-out" aria-label="축소">−</button>
       <button class="zoom-label" title="화면 맞춤">100%</button>
       <button data-act="zoom-in" aria-label="확대">+</button>
     </div>
-    <span class="save-state"></span>
   </div>
 </section>
 

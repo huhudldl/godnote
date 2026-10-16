@@ -338,3 +338,61 @@ details summary { cursor: pointer; font-weight: 600; }
 .lib-search svg { width: 16px; height: 16px; color: var(--muted); }
 .lib-search input { border: 0; outline: 0; background: none; font: inherit; font-size: 14px; color: var(--text); width: 140px; }
 @media (max-width: 600px) { .lib-search input { width: 80px; } .topbar h1 { font-size: 22px; } }
+
+/* ===== B안: 떠 있는 알약 툴바 ===== */
+.editor .toolbar {
+  position: absolute; z-index: 10; top: calc(var(--safe-top) + 10px); left: 10px; right: 10px;
+  display: flex; justify-content: space-between; align-items: flex-start; gap: 8px;
+  background: transparent; border: 0; padding: 0; pointer-events: none;
+}
+.editor .tb-left, .editor .tb-right {
+  flex: 0 1 auto; pointer-events: auto; gap: 1px; padding: 3px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 4px 18px rgba(0,0,0,.10);
+}
+.editor .tb-left { min-width: 0; }
+.editor .title { max-width: 240px; padding: 0 12px 0 4px; font-size: 14px; }
+
+.tool-pill {
+  position: absolute; z-index: 11; left: 50%; transform: translateX(-50%); bottom: calc(var(--safe-bottom) + 14px);
+  display: flex; align-items: center; gap: 2px; padding: 5px 10px 5px 4px; max-width: calc(100% - 16px);
+  background: var(--surface); border: 1px solid var(--line); border-radius: 999px; box-shadow: 0 10px 30px rgba(0,0,0,.16);
+  transition: top .18s ease, bottom .18s ease;
+}
+.editor[data-pill="top"] .tool-pill { bottom: auto; top: calc(var(--safe-top) + 64px); }
+.tool-pill.dragging { transition: none; opacity: .85; }
+.pill-grip { border: 0; background: none; width: 22px; height: 38px; padding: 0; color: var(--muted); cursor: grab; touch-action: none; display: grid; place-items: center; }
+.pill-grip svg { width: 18px; height: 18px; fill: currentColor; stroke: none; }
+.tool-pill .tb-tools { background: transparent; padding: 0; gap: 2px; border-radius: 0; }
+.tool-pill .tool { width: 42px; height: 42px; border-radius: 50%; }
+.tool-pill .tool.on { background: var(--accent-soft); color: var(--accent); box-shadow: none; }
+.tool-pill .tool.on::after { bottom: 4px; }
+.quick-colors { display: flex; align-items: center; gap: 7px; padding: 0 4px 0 10px; margin-left: 4px; border-left: 1px solid var(--line); }
+.quick-colors:empty { display: none; }
+.qc { width: 24px; height: 24px; border-radius: 50%; padding: 0; border: 2px solid var(--surface); background: var(--c); box-shadow: 0 0 0 1px var(--line); }
+.qc.on { box-shadow: 0 0 0 2px var(--accent); }
+.tool-pill .favs { padding-left: 8px; margin-left: 4px; }
+
+/* 도구 옵션은 알약 툴바 바로 위(또는 아래)에 */
+.editor .tool-options { top: auto; bottom: calc(var(--safe-bottom) + 76px); }
+.editor[data-pill="top"] .tool-options { bottom: auto; top: calc(var(--safe-top) + 120px); }
+.editor[data-pill="top"] .paste-pill { top: calc(var(--safe-top) + 122px); }
+
+/* 페이지가 모서리 버튼·툴바에 가리지 않게 */
+.editor .pages-inner { padding: calc(var(--safe-top) + 64px) 16px calc(var(--safe-bottom) + 96px); }
+.editor[data-ui="hidden"] .pages-inner { padding-top: calc(var(--safe-top) + 16px); padding-bottom: 40px; }
+.editor[data-ui="hidden"] .tool-pill { display: none !important; }
+
+/* 상태 표시: 왼쪽 아래 쪽수·저장 상태, 오른쪽 아래 확대 */
+.statusbar { padding: 8px 14px calc(var(--safe-bottom) + 20px); align-items: flex-end; }
+.status-left { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; pointer-events: auto; }
+.editor[data-pill="bottom"] .statusbar { padding-bottom: calc(var(--safe-bottom) + 22px); }
+
+/* 페이지 목록도 떠 있는 카드로 */
+.editor .page-panel { top: calc(var(--safe-top) + 62px); left: 10px; bottom: calc(var(--safe-bottom) + 14px); border: 1px solid var(--line); border-radius: 16px; overflow: hidden; }
+.editor .more-menu { top: calc(var(--safe-top) + 60px); right: 10px; }
+
+@media (max-width: 760px) {
+  .quick-colors, .tool-pill .favs { display: none; }
+  .tool-pill .tool { width: 38px; height: 38px; }
+  .editor .title { display: none; }
+}
