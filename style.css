@@ -210,3 +210,33 @@ details summary { cursor: pointer; font-weight: 600; }
   .tb-tools { gap: 0; }
   .icon-btn { width: 34px; }
 }
+
+/* 글자 크기 조절 */
+.selbar { align-items: center; }
+.size-ctrl { display: flex; align-items: center; gap: 2px; padding-right: 4px; margin-right: 2px; border-right: 1px solid var(--line); }
+.size-ctrl[hidden] { display: none !important; }
+.size-ctrl button { min-width: 40px; }
+.size-ctrl small { font-size: 11px; margin-left: 1px; }
+.size-val { min-width: 28px; text-align: center; font-variant-numeric: tabular-nums; font-size: 14px; color: var(--muted); }
+
+/* 메뉴 숨기기 (필기 집중 모드) */
+.editor[data-ui="hidden"] .toolbar,
+.editor[data-ui="hidden"] .tool-options,
+.editor[data-ui="hidden"] .more-menu,
+.editor[data-ui="hidden"] .statusbar .page-label,
+.editor[data-ui="hidden"] .statusbar .zoom { display: none !important; }
+.float-bar {
+  position: absolute; z-index: 30; top: calc(var(--safe-top) + 10px); right: 12px; display: flex; gap: 4px; padding: 4px;
+  background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 6px 20px rgba(0,0,0,.18); opacity: .92;
+}
+.float-bar button { border: 0; background: none; width: 42px; height: 38px; border-radius: 10px; display: grid; place-items: center; color: var(--text); }
+.float-bar button:hover { background: rgba(127,127,127,.12); }
+.float-bar button:disabled { opacity: .3; }
+.save-state.saving { color: var(--accent); }
+.save-state.ok { color: #2a9a55; }
+
+/* 옵션이 있는 도구는 한 번 더 누르면 옵션이 열림을 표시 */
+.tool { position: relative; }
+.tool.on[data-tool="pen"]::after, .tool.on[data-tool="hl"]::after, .tool.on[data-tool="eraser"]::after, .tool.on[data-tool="text"]::after {
+  content: ""; position: absolute; bottom: 3px; left: 50%; transform: translateX(-50%); width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: .6;
+}

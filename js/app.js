@@ -22,7 +22,7 @@ function toast(msg, ms = 2600) {
 const editor = new Editor(editorEl, {
   toast,
   onSaved: () => {
-    editorEl.querySelector('.save-state').textContent = '저장됨';
+    editor.setSaveState(drive.hasValidToken() ? '기기에 저장됨 · 드라이브 대기' : '기기에 저장됨', 'ok');
     // 마지막 동작 후 약 3.5초(로컬 저장 0.5초 + 3초) 뒤 드라이브에 올림
     scheduleSync(3000);
   },
@@ -37,7 +37,7 @@ const editor = new Editor(editorEl, {
 async function openNote(id) {
   library.hidden = true;
   editorEl.hidden = false;
-  editorEl.querySelector('.save-state').textContent = '';
+  editor.setSaveState('');
   try {
     await editor.open(id);
   } catch (e) {
@@ -258,11 +258,14 @@ drive.onChange(s => {
   b.querySelector('.sync-text').textContent = syncLabel(s);
   b.title = s.message || s.email || '';
   if (s.status === 'error') toast('동기화 오류: ' + s.message, 5000);
-  const st = editorEl.querySelector('.save-state');
-  if (!editorEl.hidden) {
-    if (s.status === 'syncing') st.textContent = '동기화 중…';
-    else if (s.status === 'idle' && st.textContent === '동기화 중…') st.textContent = '동기화됨';
-    else if (s.status === 'expired') st.textContent = '로그인 만료 — 서재에서 다시 로그인';
+  // 편집 화면 아래 저장 상태 표시
+  if (!editorEl.hidden && editor.note && !editor.hasPendingSave()) {
+    const time = new Date().toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' });
+    if (s.status === 'syncing') editor.setSaveState('드라이브에 저장 중…', 'saving');
+    else if (s.status === 'idle') editor.setSaveState(`드라이브까지 저장됨 ✓ ${time}`, 'ok');
+    else if (s.status === 'expired') editor.setSaveState('기기에 저장됨 · 드라이브는 로그인 만료(서재에서 다시 로그인)');
+    else if (s.status === 'offline') editor.setSaveState('기기에 저장됨 · 오프라인');
+    else if (s.status === 'error') editor.setSaveState('기기에 저장됨 · 드라이브 저장 실패, 다시 시도합니다');
   }
   renderAccount();
 });

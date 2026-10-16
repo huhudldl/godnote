@@ -82,6 +82,7 @@
       <button class="icon-btn" data-act="pen-only" title="손가락 필기 끄기 (애플펜슬로만 필기, 손가락은 스크롤)" aria-label="손가락 필기 끄기">
         <svg viewBox="0 0 24 24"><path d="M9 12V5.5a1.5 1.5 0 0 1 3 0V11m0-1.5a1.5 1.5 0 0 1 3 0V12m0-1a1.5 1.5 0 0 1 3 0v4a6 6 0 0 1-6 6h-.5a6 6 0 0 1-5-2.7l-2.2-3.6a1.5 1.5 0 0 1 2.5-1.6L9 15"/><path d="M3 3l18 18" class="slash"/></svg>
       </button>
+      <button class="icon-btn" data-act="hide-ui" title="메뉴 숨기기 (F)" aria-label="메뉴 숨기기"><svg viewBox="0 0 24 24"><path d="M9 4v5H4M15 4v5h5M9 20v-5H4M15 20v-5h5"/></svg></button>
       <button class="icon-btn" data-act="more" aria-label="더보기"><svg viewBox="0 0 24 24"><circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/></svg></button>
     </div>
   </header>
@@ -100,8 +101,17 @@
     <button data-act="del-page" class="danger">현재 페이지 삭제</button>
   </div>
   <div class="selbar" hidden>
+    <div class="size-ctrl">
+      <button data-act="size-down" aria-label="글자 작게">A<small>−</small></button>
+      <span class="size-val">18</span>
+      <button data-act="size-up" aria-label="글자 크게">A<small>+</small></button>
+    </div>
     <button data-act="edit">편집</button>
     <button data-act="delete" class="danger">삭제</button>
+  </div>
+  <div class="float-bar" hidden>
+    <button data-act="undo-float" aria-label="실행 취소"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg></button>
+    <button data-act="show-ui" aria-label="메뉴 보이기" title="메뉴 보이기 (F)"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
   </div>
   <div class="pages"><div class="pages-inner"></div></div>
   <div class="statusbar">

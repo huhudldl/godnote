@@ -132,6 +132,8 @@ export class Editor {
     this.undoStack = [];
     this.redoStack = [];
     this.zoom = 1;
+    this.editing = null;
+    this.setUiHidden(false);
     this.root.querySelector('.title').textContent = this.note.name;
     if (this.pdf) { this.pdf.destroy(); this.pdf = null; }
     if (this.note.hasPdf) {
@@ -166,6 +168,7 @@ export class Editor {
   }
 
   async close() {
+    this.finishEditing();
     this.deselect();
     await this.flush();
     const note = this.note;
@@ -188,8 +191,17 @@ export class Editor {
   isOpen(id) { return this.note && this.note.id === id; }
 
   // ---------- 저장 ----------
+  setSaveState(text, cls = '') {
+    const el = this.root.querySelector('.save-state');
+    el.textContent = text;
+    el.className = 'save-state' + (cls ? ' ' + cls : '');
+  }
+
+  hasPendingSave() { return !!this.saveTimer; }
+
   scheduleSave() {
     this.note.updatedAt = Date.now();
+    this.setSaveState('저장 중…', 'saving');
     clearTimeout(this.saveTimer);
     this.saveTimer = setTimeout(() => this.flush(), 500);
   }
@@ -427,29 +439,70 @@ export class Editor {
     if (!el) return;
     el.classList.add('selected');
     this.selected = { pid, id, el, kind: el.classList.contains('text') ? 'text' : 'image' };
-    const bar = this.root.querySelector('.selbar');
-    bar.querySelector('[data-act="edit"]').hidden = this.selected.kind !== 'text';
-    bar.hidden = false;
-    this.positionSelection();
+    this.showSelbar();
   }
 
   deselect() {
     if (!this.selected) return;
     this.selected.el.classList.remove('selected');
     this.selected = null;
-    this.root.querySelector('.selbar').hidden = true;
+    if (!this.editing) this.root.querySelector('.selbar').hidden = true;
+  }
+
+  // 선택바: 선택된 항목 또는 편집 중인 텍스트에 붙음
+  barTarget() { return this.editing || this.selected; }
+
+  showSelbar() {
+    const t = this.barTarget();
+    const bar = this.root.querySelector('.selbar');
+    if (!t) { bar.hidden = true; return; }
+    const isText = t.kind === 'text';
+    bar.querySelector('.size-ctrl').hidden = !isText;
+    bar.querySelector('[data-act="edit"]').hidden = !isText || !!this.editing;
+    if (isText) {
+      const it = this.findItem(t.pid, t.id);
+      if (it) bar.querySelector('.size-val').textContent = it.s;
+    }
+    bar.hidden = false;
+    this.positionSelection();
+  }
+
+  // 글자 크기 한 단계 키우기(+1) / 줄이기(-1)
+  changeTextSize(dir) {
+    const t = this.barTarget();
+    if (!t || t.kind !== 'text') return;
+    const it = this.findItem(t.pid, t.id);
+    if (!it) return;
+    const SIZES = [8, 10, 12, 14, 16, 18, 20, 24, 28, 32, 40, 48, 64, 80];
+    let next = dir > 0 ? SIZES.find(s => s > it.s) : [...SIZES].reverse().find(s => s < it.s);
+    if (next == null) return;
+    const before = this.editing ? null : this.snap(t.pid);
+    it.s = next;
+    this.tools.text.size = next; // 다음에 만드는 글자도 같은 크기로
+    this.saveTools();
+    t.el.style.fontSize = next * this.scale + 'px';
+    this.root.querySelector('.selbar .size-val').textContent = next;
+    if (before) this.commit(t.pid, before); else this.scheduleSave();
+    this.positionSelection();
   }
 
   positionSelection() {
     const bar = this.root.querySelector('.selbar');
-    if (!this.selected || !this.selected.el.isConnected) { bar.hidden = true; return; }
-    const r = this.selected.el.getBoundingClientRect();
+    const target = this.barTarget();
+    if (!target || !target.el.isConnected) { bar.hidden = true; return; }
+    const r = target.el.getBoundingClientRect();
     const rr = this.root.getBoundingClientRect();
-    bar.style.left = clamp(r.left - rr.left, 8, rr.width - 200) + 'px';
+    bar.style.left = clamp(r.left - rr.left, 8, rr.width - 300) + 'px';
     bar.style.top = Math.max(r.top - rr.top - 48, 60) + 'px';
   }
 
   deleteSelected() {
+    if (!this.selected && this.editing) {
+      // 입력 중인 글자 상자 삭제: 내용을 비우고 편집을 끝내면 지워짐
+      this.editing.el.textContent = '';
+      this.finishEditing();
+      return;
+    }
     if (!this.selected) return;
     const { pid, id } = this.selected;
     const before = this.snap(pid);
@@ -467,6 +520,7 @@ export class Editor {
     if (!el) return;
     const before = this.snap(pid);
     el.classList.add('editing');
+    this.editing = { pid, id, el, kind: 'text' };
     try { el.contentEditable = 'plaintext-only'; } catch { el.contentEditable = 'true'; }
     if (el.contentEditable !== 'plaintext-only') el.contentEditable = 'true';
     el.focus();
@@ -482,9 +536,14 @@ export class Editor {
       if (t) { t.text = el.innerText.replace(/\n$/, ''); this.scheduleSave(); }
     };
     el.addEventListener('input', onInput);
+    this.showSelbar();
     const done = () => {
+      if (el._done !== done) return;
+      el._done = null;
       el.removeEventListener('blur', done);
       el.removeEventListener('input', onInput);
+      if (this.editing && this.editing.el === el) this.editing = null;
+      if (!this.selected) this.root.querySelector('.selbar').hidden = true;
       el.contentEditable = 'false';
       el.classList.remove('editing');
       const pi = this.pageInk(pid);
@@ -497,7 +556,16 @@ export class Editor {
       this.renderItems(pid);
       this.commit(pid, before);
     };
+    el._done = done;
     el.addEventListener('blur', done);
+  }
+
+  // 편집 중인 글자 상자를 확실히 마무리 (포커스가 없어 blur 가 안 오는 경우 대비)
+  finishEditing() {
+    const ed = this.editing;
+    if (!ed) return;
+    if (ed.el._done) ed.el._done();
+    if (document.activeElement === ed.el) ed.el.blur();
   }
 
   addText(pid, x, y) {
@@ -626,6 +694,14 @@ export class Editor {
     const bar = R.querySelector('.selbar');
     bar.querySelector('[data-act="delete"]').onclick = () => this.deleteSelected();
     bar.querySelector('[data-act="edit"]').onclick = () => { const s = this.selected; if (s) this.editText(s.pid, s.id); };
+    bar.querySelector('[data-act="size-up"]').onclick = () => this.changeTextSize(1);
+    bar.querySelector('[data-act="size-down"]').onclick = () => this.changeTextSize(-1);
+    // 텍스트를 입력하는 중에 버튼을 눌러도 입력 상태가 풀리지 않게 함
+    bar.addEventListener('pointerdown', e => { if (this.editing) e.preventDefault(); });
+    bar.addEventListener('mousedown', e => { if (this.editing) e.preventDefault(); });
+    R.querySelector('[data-act="hide-ui"]').onclick = () => this.setUiHidden(true);
+    R.querySelector('[data-act="show-ui"]').onclick = () => this.setUiHidden(false);
+    R.querySelector('[data-act="undo-float"]').onclick = () => this.undo();
 
     document.addEventListener('keydown', e => {
       if (!this.note || this.root.hidden) return;
@@ -638,6 +714,7 @@ export class Editor {
       else if (!editing && !mod) {
         const map = { p: 'pen', h: 'hl', e: 'eraser', t: 'text', v: 'select' };
         if (map[e.key]) this.setTool(map[e.key]);
+        else if (e.key === 'f') this.setUiHidden(this.root.dataset.ui !== 'hidden');
       }
     });
     document.addEventListener('paste', e => {
@@ -686,7 +763,7 @@ export class Editor {
       const item = e.target.closest('.item.text');
       if (item && item.classList.contains('editing')) return;
       e.preventDefault();
-      if (document.activeElement && document.activeElement.isContentEditable) { document.activeElement.blur(); return; }
+      if (this.editing) { this.finishEditing(); return; }
       if (item) return this.editText(pid, item.dataset.id);
       const [x, y] = this.pagePoint(pageEl, e);
       return this.addText(pid, x, y);
@@ -694,7 +771,7 @@ export class Editor {
 
     if (tool === 'pen' || tool === 'hl' || tool === 'eraser') {
       e.preventDefault();
-      if (document.activeElement && document.activeElement.isContentEditable) document.activeElement.blur();
+      this.finishEditing();
       this.deselect();
       try { this.scroller.setPointerCapture(e.pointerId); } catch {}
       const live = this.attachLive(pageEl);
@@ -862,6 +939,7 @@ export class Editor {
   saveTools() { localStorage.setItem(LS_TOOLS, JSON.stringify(this.tools)); }
 
   setTool(t) {
+    this.finishEditing();
     if (t !== 'select') this.deselect();
     this.tools.tool = t;
     this.saveTools();
@@ -933,7 +1011,16 @@ export class Editor {
     this.updatePageLabel();
   }
 
+  setUiHidden(hidden) {
+    this.root.dataset.ui = hidden ? 'hidden' : '';
+    this.root.querySelector('.float-bar').hidden = !hidden;
+    this.root.querySelector('.tool-options').hidden = true;
+    this.root.querySelector('.more-menu').hidden = true;
+    this.updateUndoUi();
+  }
+
   updateUndoUi() {
+    this.root.querySelector('[data-act="undo-float"]').disabled = !this.undoStack.length;
     this.root.querySelector('[data-act="undo"]').disabled = !this.undoStack.length;
     this.root.querySelector('[data-act="redo"]').disabled = !this.redoStack.length;
   }
