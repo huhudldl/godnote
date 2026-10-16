@@ -113,6 +113,17 @@ export async function exportNotePdf(note, ink, pdfBlob, onProgress = () => {}) {
 }
 
 // 아이패드: 공유 시트(파일에 저장·AirDrop 등), 맥: 다운로드 폴더로 저장
+// 버튼을 누른 직후에 호출 (아이패드 공유 시트용)
+export async function shareNow(blob, filename) {
+  const file = new File([blob], filename, { type: 'application/pdf' });
+  try {
+    await navigator.share({ files: [file], title: filename });
+    return 'shared';
+  } catch (e) {
+    return e.name === 'AbortError' ? 'cancelled' : 'failed';
+  }
+}
+
 export async function saveOrShare(blob, filename) {
   const file = new File([blob], filename, { type: 'application/pdf' });
   const touch = matchMedia('(pointer: coarse)').matches;
@@ -122,6 +133,7 @@ export async function saveOrShare(blob, filename) {
       return 'shared';
     } catch (e) {
       if (e.name === 'AbortError') return 'cancelled';
+      if (e.name === 'NotAllowedError') return 'needTap';
     }
   }
   const url = URL.createObjectURL(blob);

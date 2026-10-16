@@ -104,6 +104,7 @@ export class PagePanel {
     target.width = c.width;
     target.height = c.height;
     target.getContext('2d').drawImage(c, 0, 0);
+    c.width = 0; c.height = 0;
   }
 
   closeMenu() {

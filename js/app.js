@@ -299,14 +299,26 @@ async function exportNote(id) {
   const note = await db.getNote(id);
   if (!note) return;
   try {
-    const { exportNotePdf, saveOrShare } = await import('./export.js');
+    const { exportNotePdf, saveOrShare, shareNow } = await import('./export.js');
     const ink = await db.getInk(id);
     const pdf = note.hasPdf ? await db.getPdf(id) : null;
     const blob = await exportNotePdf(note, ink, pdf, (i, n) => toast(`PDF 만드는 중… ${i} / ${n}쪽`, 60000));
     const name = note.name.replace(/[\\/:*?"<>|]/g, '_') + '.pdf';
-    const how = await saveOrShare(blob, name);
+    let how = await saveOrShare(blob, name);
+    if (how === 'needTap') {
+      // PDF 를 만드는 동안 시간이 지나 바로 공유 창을 열 수 없을 때: 준비 완료 창에서 한 번 더 누름
+      $('#toast').hidden = true;
+      const dlg = $('#share-ready');
+      dlg.querySelector('.share-name').textContent = name;
+      dlg.showModal();
+      how = await new Promise(resolve => {
+        dlg.querySelector('[data-a="share"]').onclick = async () => { dlg.close(); resolve(await shareNow(blob, name)); };
+        dlg.querySelector('[data-a="cancel"]').onclick = () => { dlg.close(); resolve('cancelled'); };
+      });
+    }
     if (how === 'downloaded') toast(`'${name}'을(를) 다운로드 폴더에 저장했습니다`, 4000);
     else if (how === 'shared') toast('PDF를 내보냈습니다');
+    else if (how === 'failed') toast('공유 창을 열지 못했습니다. 다시 시도해 주세요', 4000);
     else toast('내보내기를 취소했습니다');
   } catch (e) {
     console.error(e);

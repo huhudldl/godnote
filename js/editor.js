@@ -233,7 +233,7 @@ export class Editor {
     this.selected = null;  // 선택된 텍스트/이미지
     this.saveTimer = null;
     this.bindUi();
-    this.observer = new IntersectionObserver(es => this.onIntersect(es), { root: this.scroller, rootMargin: '150% 0px' });
+    this.observer = new IntersectionObserver(es => this.onIntersect(es), { root: this.scroller, rootMargin: '60% 0px' });
     this.resizeObs = new ResizeObserver(() => { if (this.note) this.layout(true); });
     this.resizeObs.observe(this.scroller);
     this.panel = new PagePanel(this);
@@ -246,6 +246,7 @@ export class Editor {
     this.ink = await db.getInk(id);
     this.undoStack = [];
     this.redoStack = [];
+    this.srcPool = null;
     this.zoom = 1;
     this.editing = null;
     if (this.search) this.search.reset();
@@ -357,7 +358,21 @@ export class Editor {
 
   pageInk(pid) { return this.ink[pid] || (this.ink[pid] = emptyPage()); }
 
-  snap(pid) { return JSON.stringify(this.ink[pid] || emptyPage()); }
+  // 실행 취소용 스냅샷. 이미지(dataURL)는 큰 문자열이라 공용 보관소에 한 번만 두고 키로 대신함
+  snap(pid) {
+    const pool = this.srcPool || (this.srcPool = { byKey: new Map(), bySrc: new Map() });
+    return JSON.stringify(this.ink[pid] || emptyPage(), (k, v) => {
+      if (k !== 'src' || typeof v !== 'string' || v.length < 200) return v;
+      let key = pool.bySrc.get(v);
+      if (!key) { key = '@img' + pool.byKey.size; pool.bySrc.set(v, key); pool.byKey.set(key, v); }
+      return key;
+    });
+  }
+
+  unsnap(str) {
+    const pool = this.srcPool;
+    return JSON.parse(str, (k, v) => (k === 'src' && typeof v === 'string' && v.startsWith('@img') && pool ? pool.byKey.get(v) || v : v));
+  }
 
   commit(pid, before) {
     const after = this.snap(pid);
@@ -375,7 +390,7 @@ export class Editor {
     if (!a) return;
     this.deselect();
     this.clearLasso();
-    this.ink[a.pid] = JSON.parse(a.before);
+    this.ink[a.pid] = this.unsnap(a.before);
     this.redoStack.push(a);
     this.refreshPage(a.pid);
     this.scheduleSave();
@@ -387,7 +402,7 @@ export class Editor {
     if (!a) return;
     this.deselect();
     this.clearLasso();
-    this.ink[a.pid] = JSON.parse(a.after);
+    this.ink[a.pid] = this.unsnap(a.after);
     this.undoStack.push(a);
     this.refreshPage(a.pid);
     this.scheduleSave();
@@ -498,6 +513,7 @@ export class Editor {
         if (el._rs !== rs) return;
         bg.width = W; bg.height = H;
         bg.getContext('2d').drawImage(off, 0, 0);
+        off.width = 0; off.height = 0;
       } catch (e) {
         if (e && e.name !== 'RenderingCancelledException') console.warn(e);
       }
@@ -1043,6 +1059,13 @@ export class Editor {
     }, { passive: true });
     // iPad 사파리에서 펜으로 쓸 때 화면이 끌려가거나 돋보기가 뜨는 것을 막음
     sc.addEventListener('touchmove', e => { if (this.active) e.preventDefault(); }, { passive: false });
+    sc.addEventListener('touchstart', e => {
+      if (!this.tools.penOnly) return;
+      const fingers = [...e.touches].filter(t => t.touchType !== 'stylus');
+      const onlyFingers = [...e.changedTouches].every(t => t.touchType !== 'stylus');
+      const writing = (this.active && this.active.ptype === 'pen') || Date.now() - this.lastPenAt < 1000;
+      if (writing && onlyFingers && fingers.length === 1) e.preventDefault();
+    }, { passive: false });
     let tap = null;
     sc.addEventListener('touchstart', e => {
       const all = [...e.touches];
@@ -1207,7 +1230,7 @@ export class Editor {
     if (a.raf) cancelAnimationFrame(a.raf);
     if (a.live) a.live.remove();
     if (a.before && a.kind !== 'stroke') {
-      this.ink[a.pid] = JSON.parse(a.before);
+      this.ink[a.pid] = this.unsnap(a.before);
       this.refreshPage(a.pid);
     }
   }
@@ -1299,6 +1322,7 @@ export class Editor {
   }
 
   onMove(e) {
+    if (e.pointerType === 'pen') this.lastPenAt = Date.now();
     const a = this.active;
     if (!a || e.pointerId !== a.id) return;
     e.preventDefault();
@@ -1321,7 +1345,7 @@ export class Editor {
         if (a.holdX == null || Math.hypot(lx - a.holdX, ly - a.holdY) > tol) {
           a.holdX = lx; a.holdY = ly;
           clearTimeout(a.holdTimer);
-          a.holdTimer = setTimeout(() => this.trySnap(a), 550);
+          a.holdTimer = setTimeout(() => this.trySnap(a), 700);
         }
       }
     } else if (a.kind === 'erase') {
