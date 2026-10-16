@@ -23,6 +23,7 @@
   <header class="topbar">
     <h1>갓 노트</h1>
     <div class="spacer"></div>
+    <label class="lib-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><input id="lib-search" type="search" placeholder="노트 검색" autocomplete="off"></label>
     <button id="sync-btn" class="sync-btn" title="동기화"><span class="dot"></span><span class="sync-text">로그인</span></button>
     <button id="settings-btn" class="icon-btn" title="설정" aria-label="설정">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
@@ -58,6 +59,9 @@
       <button class="icon-btn" data-act="back" aria-label="서재로">
         <svg viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></svg>
       </button>
+      <button class="icon-btn" data-act="pages" title="페이지 목록" aria-label="페이지 목록">
+        <svg viewBox="0 0 24 24"><rect x="4" y="4" width="6.5" height="7" rx="1"/><rect x="13.5" y="4" width="6.5" height="7" rx="1"/><rect x="4" y="13.5" width="6.5" height="7" rx="1"/><rect x="13.5" y="13.5" width="6.5" height="7" rx="1"/></svg>
+      </button>
       <span class="title"></span>
     </div>
     <div class="tb-tools">
@@ -82,9 +86,11 @@
       <button class="tool" data-tool="select" title="선택·이동 (V)" aria-label="선택">
         <svg viewBox="0 0 24 24"><path d="M5 3l14 8-6 2-2 6z"/></svg>
       </button>
+      <div class="favs" hidden></div>
       <input id="image-input" type="file" accept="image/*" hidden>
     </div>
     <div class="tb-right">
+      <button class="icon-btn" data-act="search" title="노트에서 찾기 (⌘F)" aria-label="찾기"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg></button>
       <button class="icon-btn" data-act="undo" title="실행 취소" aria-label="실행 취소"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg></button>
       <button class="icon-btn" data-act="redo" title="다시 실행" aria-label="다시 실행"><svg viewBox="0 0 24 24"><path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/></svg></button>
       <button class="icon-btn" data-act="pen-only" title="손가락 필기 끄기 (애플펜슬로만 필기, 손가락은 스크롤)" aria-label="손가락 필기 끄기">
@@ -97,6 +103,7 @@
   <div class="tool-options" hidden></div>
   <div class="more-menu" hidden>
     <button data-act="export">필기 포함 PDF로 내보내기</button>
+    <button data-act="paste">붙여넣기 (현재 페이지)</button>
     <button data-act="add-page">현재 페이지 뒤에 빈 페이지 추가</button>
     <label class="menu-row">새 페이지 종이
       <select>
@@ -127,14 +134,33 @@
       <button data-lcolor="#1f9d55" style="--c:#1f9d55" aria-label="초록"></button>
       <button data-lcolor="#8e44ad" style="--c:#8e44ad" aria-label="보라"></button>
     </div>
+    <button data-act="lasso-copy">복사</button>
+    <button data-act="lasso-cut">잘라내기</button>
     <button data-act="lasso-dup">복제</button>
     <button data-act="lasso-del" class="danger">삭제</button>
   </div>
+  <button class="paste-pill" hidden>붙여넣기</button>
   <div class="float-bar" hidden>
     <button data-act="undo-float" aria-label="실행 취소"><svg viewBox="0 0 24 24"><path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/></svg></button>
     <button data-act="show-ui" aria-label="메뉴 보이기" title="메뉴 보이기 (F)"><svg viewBox="0 0 24 24"><path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/></svg></button>
   </div>
   <div class="pages"><div class="pages-inner"></div></div>
+  <div class="search-bar" hidden>
+    <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
+    <input type="search" placeholder="PDF·텍스트에서 찾기" enterkeyhint="search" autocomplete="off">
+    <span class="sr-count"></span>
+    <button data-act="sr-prev" aria-label="이전">▲</button>
+    <button data-act="sr-next" aria-label="다음">▼</button>
+    <button data-act="sr-close" aria-label="닫기">✕</button>
+  </div>
+  <aside class="page-panel" hidden>
+    <div class="pp-head">
+      <b>페이지</b>
+      <button class="btn small-btn" data-act="pp-add">+ 빈 페이지</button>
+      <button class="icon-btn" data-act="pp-close" aria-label="닫기"><svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+    </div>
+    <div class="pp-list"></div>
+  </aside>
   <div class="statusbar">
     <span class="page-label"></span>
     <div class="zoom">

@@ -138,9 +138,11 @@ async function renderLibrary() {
   bar.appendChild(sp);
   chip('trash', '휴지통', trashed.length || null, 'trash');
 
-  // 노트 목록
+  // 노트 목록 (검색어가 있으면 모든 폴더에서 이름으로 찾기)
+  const q = $('#lib-search').value.trim().toLowerCase();
   let list;
-  if (view === 'trash') list = trashed.sort((a, b) => b.trashedAt - a.trashedAt);
+  if (q) list = (view === 'trash' ? trashed : live).filter(n => n.name.toLowerCase().includes(q));
+  else if (view === 'trash') list = trashed.sort((a, b) => b.trashedAt - a.trashedAt);
   else if (view === 'all') list = live;
   else list = live.filter(n => n.folderId === view);
   if (view !== 'trash') list.sort((a, b) => b.updatedAt - a.updatedAt);
@@ -152,8 +154,8 @@ async function renderLibrary() {
   grid.innerHTML = '';
   const empty = $('#empty');
   empty.hidden = list.length > 0;
-  empty.querySelector('p').textContent = view === 'trash' ? '휴지통이 비어 있습니다.' : '아직 노트가 없습니다.';
-  empty.querySelector('.muted').hidden = view === 'trash';
+  empty.querySelector('p').textContent = q ? `'${$('#lib-search').value.trim()}'에 맞는 노트가 없습니다.` : view === 'trash' ? '휴지통이 비어 있습니다.' : '아직 노트가 없습니다.';
+  empty.querySelector('.muted').hidden = view === 'trash' || !!q;
   const folderName = id => (folders.find(f => f.id === id) || {}).name;
   for (const n of list) {
     const card = document.createElement('div');
@@ -168,7 +170,7 @@ async function renderLibrary() {
       info = `${left}일 후 완전 삭제`;
     } else {
       info = `${fmtDate(n.updatedAt)} · ${n.pages.length}쪽`;
-      if (view === 'all' && folderName(n.folderId)) info += ` · ${folderName(n.folderId)}`;
+      if ((view === 'all' || q) && folderName(n.folderId)) info += ` · ${folderName(n.folderId)}`;
     }
     card.querySelector('.date').textContent = info;
     card.onclick = e => {
@@ -279,6 +281,9 @@ function moveMenu(note, anchor, folders) {
     scheduleSync(500);
   };
 }
+
+let searchTimer;
+$('#lib-search').addEventListener('input', () => { clearTimeout(searchTimer); searchTimer = setTimeout(renderLibrary, 150); });
 
 $('#empty-trash').onclick = async () => {
   const trashed = (await db.allNotes()).filter(n => isNote(n) && n.trashedAt);
@@ -410,14 +415,22 @@ function scheduleSync(ms) {
 async function runSync() {
   clearTimeout(syncTimer);
   await editor.flush();
-  await drive.sync(async pulledIds => {
-    if (editor.note && pulledIds.includes(editor.note.id)) {
-      if (editor.active) return; // 쓰는 중이면 다음 동기화 때 반영
-      await editor.reload();
-      toast('다른 기기에서 바뀐 내용을 불러왔습니다');
-    }
+  await drive.sync(async (pulledIds, conflicts) => {
+    if (conflicts) toast(`두 기기에서 같은 노트를 고쳐서 '충돌 사본' ${conflicts}개를 만들었습니다. 서재에서 확인하세요`, 6000);
+    if (editor.note && pulledIds.includes(editor.note.id)) reloadEditor();
     if (!library.hidden) renderLibrary();
   });
+}
+
+// 다른 기기 내용으로 편집 화면 갱신. 아직 저장 안 된 필기가 있으면 사본으로 남김
+async function reloadEditor() {
+  if (!editor.note) return;
+  if (editor.active) return setTimeout(reloadEditor, 300);
+  if (editor.hasPendingSave()) {
+    await editor.saveAsCopy();
+    toast("다른 기기에서 바뀐 내용을 불러왔고, 방금 쓴 내용은 '충돌 사본'으로 남겼습니다", 6000);
+  } else toast('다른 기기에서 바뀐 내용을 불러왔습니다');
+  await editor.reload();
 }
 
 async function doSignIn(redirect) {

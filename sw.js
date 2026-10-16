@@ -1,9 +1,9 @@
 // 오프라인에서도 앱이 열리도록 앱 파일을 캐시 (데이터는 IndexedDB 에 있음)
-const VERSION = 'godnote-v5';
+const VERSION = 'godnote-v6';
 const ASSETS = [
   './', 'index.html', 'style.css', 'config.js', 'manifest.webmanifest',
   'js/app.js', 'js/db.js', 'js/drive.js', 'js/editor.js',
-  'vendor/pdf.min.js', 'vendor/pdf.worker.min.js', 'vendor/pdf-lib.min.js', 'js/export.js',
+  'vendor/pdf.min.js', 'vendor/pdf.worker.min.js', 'vendor/pdf-lib.min.js', 'js/export.js', 'js/pages.js', 'js/search.js',
   'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png',
 ];
 self.addEventListener('install', e => {

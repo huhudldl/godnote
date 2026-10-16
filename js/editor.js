@@ -1,5 +1,7 @@
 // 노트 편집기: PDF 페이지 렌더링 + 필기(펜/형광펜/지우개/텍스트/이미지/선택)
 import { db, uid } from './db.js';
+import { PagePanel } from './pages.js';
+import { SearchBar } from './search.js';
 
 const MAX_CANVAS_PIXELS = 12_000_000; // iPad 사파리 캔버스 한도 안쪽
 const PAGE_GAP = 16;
@@ -12,6 +14,8 @@ const DEFAULT_TOOLS = {
   eraser: { mode: 'partial', size: 10 },
   text: { size: 18 },
   penOnly: false,
+  shapeSnap: true,   // 선 끝에서 잠깐 멈추면 직선·원·사각형으로 보정
+  favs: [],          // 즐겨찾는 펜 [{ t, c, w }]
 };
 
 const r1 = v => Math.round(v * 10) / 10;
@@ -29,6 +33,51 @@ function distToSeg(px, py, ax, ay, bx, by) {
   return Math.sqrt(x * x + y * y);
 }
 
+// 손으로 그린 획을 직선 / 사각형 / 타원으로 인식. 아니면 null
+export function recognizeShape(p) {
+  const n = p.length / 3;
+  if (n < 4) return null;
+  let L = 0, minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity, pr = 0;
+  for (let i = 0; i < n; i++) {
+    const x = p[i * 3], y = p[i * 3 + 1];
+    if (i) L += Math.hypot(x - p[i * 3 - 3], y - p[i * 3 - 2]);
+    minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y);
+    pr += p[i * 3 + 2];
+  }
+  pr = Math.round(pr / n * 100) / 100;
+  if (L < 24) return null;
+  const x0 = p[0], y0 = p[1], x1 = p[(n - 1) * 3], y1 = p[(n - 1) * 3 + 1];
+  const chord = Math.hypot(x1 - x0, y1 - y0);
+  let maxDev = 0;
+  for (let i = 0; i < n; i++) maxDev = Math.max(maxDev, distToSeg(p[i * 3], p[i * 3 + 1], x0, y0, x1, y1));
+  if (chord > L * 0.85 && maxDev < Math.max(4, L * 0.07)) return { p: [x0, y0, pr, x1, y1, pr], closed: false };
+  const bw = maxX - minX, bh = maxY - minY, diag = Math.hypot(bw, bh);
+  if (chord > diag * 0.3 || bw < 12 || bh < 12) return null;   // 닫힌 도형이 아님
+  const cx = (minX + maxX) / 2, cy = (minY + maxY) / 2, rx = bw / 2, ry = bh / 2;
+  let errE = 0, errR = 0;
+  for (let i = 0; i < n; i++) {
+    const x = p[i * 3], y = p[i * 3 + 1];
+    errE += Math.abs(Math.hypot((x - cx) / rx, (y - cy) / ry) - 1);
+    errR += Math.min(Math.abs(x - minX), Math.abs(x - maxX), Math.abs(y - minY), Math.abs(y - maxY));
+  }
+  errE /= n;
+  errR = errR / n / Math.min(bw, bh);
+  const r1_ = v => Math.round(v * 10) / 10;
+  if (errR < 0.07 && errR < errE) {
+    return { p: [minX, minY, pr, maxX, minY, pr, maxX, maxY, pr, minX, maxY, pr].map(r1_), closed: true };
+  }
+  if (errE < 0.13) {
+    const pts = [];
+    for (let i = 0; i < 72; i++) {
+      const a = (i / 72) * Math.PI * 2;
+      pts.push(r1_(cx + rx * Math.cos(a)), r1_(cy + ry * Math.sin(a)), pr);
+    }
+    return { p: pts, closed: true };
+  }
+  if (errR < 0.1) return { p: [minX, minY, pr, maxX, minY, pr, maxX, maxY, pr, minX, maxY, pr].map(r1_), closed: true };
+  return null;
+}
+
 // 점이 다각형(평평한 [x,y,x,y…]) 안에 있는지
 function inPoly(x, y, poly) {
   let inside = false;
@@ -43,6 +92,21 @@ export function drawStroke(ctx, s) {
   const p = s.p;
   const n = p.length / 3;
   if (!n) return;
+  if (s.k === 'poly') {
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    ctx.strokeStyle = s.c;
+    if (s.t === 'hl') { ctx.globalAlpha = 0.38; ctx.globalCompositeOperation = 'multiply'; ctx.lineWidth = s.w; }
+    else ctx.lineWidth = s.w * (0.35 + 1.3 * (p[2] || 0.5));
+    ctx.beginPath();
+    ctx.moveTo(p[0], p[1]);
+    for (let i = 1; i < n; i++) ctx.lineTo(p[i * 3], p[i * 3 + 1]);
+    if (s.closed) ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+    return;
+  }
   ctx.lineCap = 'round';
   ctx.lineJoin = 'round';
   ctx.strokeStyle = s.c;
@@ -151,6 +215,13 @@ export class Editor {
     this.scroller = root.querySelector('.pages');
     this.inner = root.querySelector('.pages-inner');
     this.tools = Object.assign({}, DEFAULT_TOOLS, JSON.parse(localStorage.getItem(LS_TOOLS) || '{}'));
+    const touchDevice = navigator.maxTouchPoints > 1 && matchMedia('(pointer: coarse)').matches;
+    if (touchDevice && !this.tools.palmV2) {
+      this.tools.penOnly = true;
+      this.tools.palmV2 = true;
+      localStorage.setItem(LS_TOOLS, JSON.stringify(this.tools));
+    }
+    this.lastPenAt = 0;
     this.zoom = 1;
     this.note = null;
     this.ink = {};
@@ -165,6 +236,8 @@ export class Editor {
     this.observer = new IntersectionObserver(es => this.onIntersect(es), { root: this.scroller, rootMargin: '150% 0px' });
     this.resizeObs = new ResizeObserver(() => { if (this.note) this.layout(true); });
     this.resizeObs.observe(this.scroller);
+    this.panel = new PagePanel(this);
+    this.search = new SearchBar(this);
   }
 
   // ---------- 열기 / 닫기 ----------
@@ -175,6 +248,7 @@ export class Editor {
     this.redoStack = [];
     this.zoom = 1;
     this.editing = null;
+    if (this.search) this.search.reset();
     this.setUiHidden(false);
     this.root.querySelector('.title').textContent = this.note.name;
     if (this.pdf) { this.pdf.destroy(); this.pdf = null; }
@@ -187,6 +261,8 @@ export class Editor {
     }
     this.buildPages();
     this.scroller.scrollTop = 0;
+    const lastEl = this.note.lastPage && this.pageEls.get(this.note.lastPage);
+    if (lastEl && lastEl.dataset.index !== '0') this.scroller.scrollTop = lastEl.offsetTop - PAGE_GAP;
     this.updateUi();
   }
 
@@ -206,20 +282,24 @@ export class Editor {
     this.root.querySelector('.title').textContent = note.name;
     this.buildPages();
     this.scroller.scrollTop = top;
+    if (this.panel) this.panel.rebuild();
     this.updateUi();
   }
 
   async close() {
+    if (this.panel) this.panel.toggle(false);
     this.finishEditing();
     this.clearLasso();
     this.deselect();
+    if (this.note && this.note.pages.length) this.note.lastPage = this.currentPageId();
     await this.flush();
     const note = this.note;
     if (note) {
       try {
         note.thumb = await this.makeThumb();
         const cur = await db.getNote(note.id);
-        if (cur && !cur.deleted) { cur.thumb = note.thumb; await db.putNote(cur); }
+        // 썸네일과 마지막 페이지는 '수정'이 아니므로 updatedAt 을 바꾸지 않음
+        if (cur && !cur.deleted) { cur.thumb = note.thumb; cur.lastPage = note.lastPage; await db.putNote(cur); }
       } catch (e) { console.warn(e); }
     }
     for (const el of this.pageEls.values()) this.releasePage(el);
@@ -254,9 +334,25 @@ export class Editor {
     clearTimeout(this.saveTimer);
     this.saveTimer = null;
     const note = this.note;
+    if (note.pages.length) note.lastPage = this.currentPageId();
     await db.putInk(note.id, this.ink);
     await db.putNote(note);
     this.onSaved(note.id);
+  }
+
+  // 저장 전인 지금 내용을 새 노트(충돌 사본)로 저장
+  async saveAsCopy() {
+    clearTimeout(this.saveTimer);
+    this.saveTimer = null;
+    const id = uid();
+    const d = new Date();
+    const stamp = `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
+    const copy = Object.assign({}, this.note, { id, name: `${this.note.name} (충돌 사본 ${stamp})`, updatedAt: Date.now() });
+    delete copy.lastPage;
+    if (this.note.hasPdf) { const pdf = await db.getPdf(this.note.id); if (pdf) await db.putPdf(id, pdf); }
+    await db.putInk(id, this.ink);
+    await db.putNote(copy);
+    this.onSaved(id);
   }
 
   pageInk(pid) { return this.ink[pid] || (this.ink[pid] = emptyPage()); }
@@ -267,6 +363,7 @@ export class Editor {
     const after = this.snap(pid);
     if (after === before) return;
     this.undoStack.push({ pid, before, after });
+    if (this.panel) this.panel.markDirty(pid);
     if (this.undoStack.length > 200) this.undoStack.shift();
     this.redoStack = [];
     this.scheduleSave();
@@ -338,6 +435,7 @@ export class Editor {
     }
     if (keepPosition) this.scroller.scrollTop = ratio * this.scroller.scrollHeight;
     if (this.lassoSel) this.updateLassoBox();
+    if (this.search && !this.search.bar.hidden) this.search.drawHits();
     clearTimeout(this.rerenderTimer);
     this.rerenderTimer = setTimeout(() => {
       for (const el of this.pageEls.values()) if (el.dataset.visible === '1') this.renderPage(el);
@@ -634,6 +732,7 @@ export class Editor {
     const n = L.strokes.size + L.texts.size + L.images.size;
     bar.querySelector('.lasso-count').textContent = `${n}개 선택`;
     bar.hidden = false;
+    this.updatePastePill();
     this.positionLassoBar();
   }
 
@@ -658,6 +757,7 @@ export class Editor {
     if (box) box.remove();
     this.lassoSel = null;
     this.root.querySelector('.lassobar').hidden = true;
+    this.updatePastePill();
   }
 
   // 이동(dx,dy) 또는 크기 조절(오른쪽 아래 손잡이)을 원본 복사본 기준으로 적용
@@ -725,6 +825,64 @@ export class Editor {
     this.refreshPage(L.pid);
     this.updateLassoBox();
     this.commit(L.pid, before);
+  }
+
+  // ---------- 복사 / 잘라내기 / 붙여넣기 (다른 페이지·다른 노트로도 가능) ----------
+  getClip() {
+    if (this.clip) return this.clip;
+    try { this.clip = JSON.parse(localStorage.getItem('godnote.clip')); } catch {}
+    return this.clip;
+  }
+
+  lassoCopy(cut) {
+    const L = this.lassoSel;
+    if (!L || !L.box) return;
+    const items = this.lassoClone();
+    const { x, y, w, h } = L.box;
+    // 상자 왼쪽 위를 (0,0) 으로 맞춰 저장
+    items.strokes.forEach(s => { for (let j = 0; j < s.p.length; j += 3) { s.p[j] = r1(s.p[j] - x); s.p[j + 1] = r1(s.p[j + 1] - y); } });
+    items.texts.forEach(t => { t.x = r1(t.x - x); t.y = r1(t.y - y); });
+    items.images.forEach(m => { m.x = r1(m.x - x); m.y = r1(m.y - y); });
+    this.clip = Object.assign(items, { w, h });
+    try { localStorage.setItem('godnote.clip', JSON.stringify(this.clip)); } catch { localStorage.removeItem('godnote.clip'); }
+    if (cut) { this.lassoDelete(); this.toast('잘라냈습니다 — 붙여넣을 페이지에서 붙여넣기를 누르세요'); }
+    else this.toast('복사했습니다');
+    this.updatePastePill();
+  }
+
+  lassoPaste() {
+    const clip = this.getClip();
+    if (!clip || !this.note) return;
+    const pid = this.currentPageId();
+    const pg = this.pageOf(pid);
+    const el = this.pageEls.get(pid);
+    const s = this.scale;
+    const visTop = (this.scroller.scrollTop - el.offsetTop) / s;
+    const visH = this.scroller.clientHeight / s;
+    const cy = clamp(visTop + visH / 2, 0, pg.h);
+    const ox = r1(clamp(pg.w / 2 - clip.w / 2, 0, Math.max(0, pg.w - clip.w)));
+    const oy = r1(clamp(cy - clip.h / 2, 0, Math.max(0, pg.h - clip.h)));
+    const before = this.snap(pid);
+    const pi = this.pageInk(pid);
+    const c = JSON.parse(JSON.stringify(clip));
+    const strokes = new Set(), texts = new Set(), images = new Set();
+    c.strokes.forEach(st => { st.id = uid(); for (let j = 0; j < st.p.length; j += 3) { st.p[j] = r1(st.p[j] + ox); st.p[j + 1] = r1(st.p[j + 1] + oy); } pi.strokes.push(st); strokes.add(st.id); });
+    c.texts.forEach(t => { t.id = uid(); t.x = r1(t.x + ox); t.y = r1(t.y + oy); pi.texts.push(t); texts.add(t.id); });
+    c.images.forEach(m => { m.id = uid(); m.x = r1(m.x + ox); m.y = r1(m.y + oy); pi.images.push(m); images.add(m.id); });
+    if (this.tools.tool !== 'lasso') this.setTool('lasso');
+    this.clearLasso();
+    this.refreshPage(pid);
+    this.lassoSel = { pid, strokes, texts, images, box: null };
+    this.updateLassoBox();
+    this.commit(pid, before);
+    this.updatePastePill();
+  }
+
+  // 올가미 도구에서 아무것도 안 골랐을 때 '붙여넣기' 버튼 표시
+  updatePastePill() {
+    const pill = this.root.querySelector('.paste-pill');
+    if (!pill) return;
+    pill.hidden = !(this.tools.tool === 'lasso' && !this.lassoSel && this.getClip() && this.root.dataset.ui !== 'hidden');
   }
 
   lassoDelete() {
@@ -874,9 +1032,44 @@ export class Editor {
       const item = e.target.closest('.item.text');
       if (item && this.tools.tool === 'select') this.editText(item.closest('.page').dataset.pid, item.dataset.id);
     });
-    sc.addEventListener('scroll', () => { this.updatePageLabel(); this.positionSelection(); this.positionLassoBar(); }, { passive: true });
+    sc.addEventListener('scroll', () => {
+      this.updatePageLabel();
+      this.positionSelection();
+      this.positionLassoBar();
+      if (this.note && this.note.pages.length) {
+        this.note.lastPage = this.currentPageId();
+        if (this.panel) this.panel.highlight(this.currentIndex());
+      }
+    }, { passive: true });
     // iPad 사파리에서 펜으로 쓸 때 화면이 끌려가거나 돋보기가 뜨는 것을 막음
     sc.addEventListener('touchmove', e => { if (this.active) e.preventDefault(); }, { passive: false });
+    let tap = null;
+    sc.addEventListener('touchstart', e => {
+      const all = [...e.touches];
+      if (all.some(t => t.touchType === 'stylus')) { tap = null; return; }
+      if (!tap) tap = { t0: Date.now(), max: 0, pts: {}, moved: false };
+      for (const t of e.changedTouches) tap.pts[t.identifier] = [t.clientX, t.clientY];
+      tap.max = Math.max(tap.max, all.length);
+      // 손가락 필기 중 두 번째 손가락이 닿으면 그 획은 취소
+      if (all.length >= 2 && this.active && this.active.ptype === 'touch') this.abortActive();
+    }, { passive: true });
+    sc.addEventListener('touchmove', e => {
+      if (!tap) return;
+      for (const t of e.changedTouches) {
+        const p = tap.pts[t.identifier];
+        if (p && Math.hypot(t.clientX - p[0], t.clientY - p[1]) > 14) tap.moved = true;
+      }
+    }, { passive: true });
+    sc.addEventListener('touchend', e => {
+      if (!tap || e.touches.length) return;
+      const t = tap;
+      tap = null;
+      if (t.moved || t.max < 2 || Date.now() - t.t0 > 350) return;
+      if (Date.now() - this.lastPenAt < 500) return; // 펜슬로 쓰는 중 손바닥이 닿은 경우
+      if (t.max === 2) { if (this.undoStack.length) { this.undo(); this.toast('실행 취소', 900); } }
+      else if (this.redoStack.length) { this.redo(); this.toast('다시 실행', 900); }
+    });
+    sc.addEventListener('touchcancel', () => { tap = null; });
 
     // 맥 트랙패드 핀치 / ctrl+휠 확대
     sc.addEventListener('wheel', e => {
@@ -889,6 +1082,7 @@ export class Editor {
     sc.addEventListener('gesturestart', e => { e.preventDefault(); gz = this.zoom; });
     sc.addEventListener('gesturechange', e => {
       e.preventDefault();
+      if (tap) tap.moved = true;
       this.inner.style.transformOrigin = `50% ${sc.scrollTop + sc.clientHeight / 2}px`;
       this.inner.style.transform = `scale(${clamp(gz * e.scale, 0.5, 4) / this.zoom})`;
     });
@@ -948,6 +1142,14 @@ export class Editor {
     const lb = R.querySelector('.lassobar');
     lb.querySelectorAll('[data-lcolor]').forEach(b => { b.onclick = () => this.lassoColor(b.dataset.lcolor); });
     lb.querySelector('[data-act="lasso-dup"]').onclick = () => this.lassoDuplicate();
+    lb.querySelector('[data-act="lasso-copy"]').onclick = () => this.lassoCopy(false);
+    lb.querySelector('[data-act="lasso-cut"]').onclick = () => this.lassoCopy(true);
+    R.querySelector('.paste-pill').onclick = () => this.lassoPaste();
+    R.querySelector('[data-act="paste"]').onclick = () => {
+      R.querySelector('.more-menu').hidden = true;
+      if (!this.getClip()) return this.toast('올가미로 고른 뒤 복사하거나 잘라낸 내용이 없습니다');
+      this.lassoPaste();
+    };
     lb.querySelector('[data-act="lasso-del"]').onclick = () => this.lassoDelete();
     R.querySelector('[data-act="export"]').onclick = async () => {
       R.querySelector('.more-menu').hidden = true;
@@ -966,6 +1168,13 @@ export class Editor {
       else if (mod && e.key.toLowerCase() === 'y' && !editing) { e.preventDefault(); this.redo(); }
       else if ((e.key === 'Backspace' || e.key === 'Delete') && this.selected && !editing) { e.preventDefault(); this.deleteSelected(); }
       else if ((e.key === 'Backspace' || e.key === 'Delete') && this.lassoSel && !editing) { e.preventDefault(); this.lassoDelete(); }
+      else if (mod && e.key === 'f') { e.preventDefault(); this.search.toggle(true); }
+      else if (mod && !editing && this.lassoSel && (e.key === 'c' || e.key === 'x')) { e.preventDefault(); this.lassoCopy(e.key === 'x'); }
+      else if (mod && !editing && e.key === 'v' && this.getClip()) {
+        // 이미지 붙여넣기(paste 이벤트)가 먼저 처리되면 필기 붙여넣기는 하지 않음
+        this._imagePasted = false;
+        setTimeout(() => { if (!this._imagePasted) this.lassoPaste(); }, 60);
+      }
       else if (e.key === 'Escape') { if (editing) document.activeElement.blur(); this.deselect(); this.clearLasso(); }
       else if (!editing && !mod) {
         const map = { p: 'pen', h: 'hl', e: 'eraser', l: 'lasso', t: 'text', v: 'select' };
@@ -976,12 +1185,34 @@ export class Editor {
     document.addEventListener('paste', e => {
       if (!this.note || this.root.hidden) return;
       const f = [...(e.clipboardData && e.clipboardData.files || [])].find(f => f.type.startsWith('image/'));
-      if (f) { e.preventDefault(); this.addImage(f); }
+      if (f) { e.preventDefault(); this._imagePasted = true; this.addImage(f); }
     });
     this.buildOptions();
   }
 
   onDown(e) {
+    if (e.pointerType === 'pen') this.lastPenAt = Date.now();
+    // 펜슬 전용: 손가락·손바닥으로는 아무것도 쓰거나 고르지 않음 (스크롤·확대만)
+    if (this.tools.penOnly && e.pointerType === 'touch') return;
+    this._onDown(e);
+    if (this.active && !this.active.ptype) this.active.ptype = e.pointerType;
+  }
+
+  // 진행 중인 동작을 저장하지 않고 취소 (두 손가락 탭 등)
+  abortActive() {
+    const a = this.active;
+    if (!a) return;
+    this.active = null;
+    clearTimeout(a.holdTimer);
+    if (a.raf) cancelAnimationFrame(a.raf);
+    if (a.live) a.live.remove();
+    if (a.before && a.kind !== 'stroke') {
+      this.ink[a.pid] = JSON.parse(a.before);
+      this.refreshPage(a.pid);
+    }
+  }
+
+  _onDown(e) {
     const pageEl = e.target.closest('.page');
     if (!pageEl || !this.note) return;
     if (e.pointerType === 'pen' && !this.tools.penOnly && !this.tools.penSeen) {
@@ -1072,6 +1303,7 @@ export class Editor {
     if (!a || e.pointerId !== a.id) return;
     e.preventDefault();
     if (a.kind === 'stroke') {
+      if (a.snapped) return;
       const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
       const p = a.stroke.p;
       for (const ev of (evs.length ? evs : [e])) {
@@ -1082,6 +1314,16 @@ export class Editor {
         p.push(r1(x), r1(y), Math.round(pr * 100) / 100);
       }
       if (!a.raf) a.raf = requestAnimationFrame(() => { a.raf = 0; this.drawLive(); });
+      // 펜이 한 자리에 잠깐 머물면 도형으로 보정
+      if (this.tools.shapeSnap) {
+        const lx = p[p.length - 3], ly = p[p.length - 2];
+        const tol = 6 / this.scale;
+        if (a.holdX == null || Math.hypot(lx - a.holdX, ly - a.holdY) > tol) {
+          a.holdX = lx; a.holdY = ly;
+          clearTimeout(a.holdTimer);
+          a.holdTimer = setTimeout(() => this.trySnap(a), 550);
+        }
+      }
     } else if (a.kind === 'erase') {
       const [x, y] = this.pagePoint(a.pageEl, e);
       if (this.eraseAt(x, y, a.lx, a.ly)) this.drawInkCanvas(a.pageEl, this.pageOf(a.pid));
@@ -1113,9 +1355,22 @@ export class Editor {
     }
   }
 
+  trySnap(a) {
+    if (this.active !== a || a.snapped) return;
+    const shape = recognizeShape(a.stroke.p);
+    if (!shape) return;
+    a.stroke.p = shape.p;
+    a.stroke.k = 'poly';
+    if (shape.closed) a.stroke.closed = true;
+    a.snapped = true;
+    this.drawLive();
+  }
+
   onUp(e, cancelled) {
+    if (e.pointerType === 'pen') this.lastPenAt = Date.now();
     const a = this.active;
     if (!a || e.pointerId !== a.id) return;
+    clearTimeout(a.holdTimer);
     this.active = null;
     if (a.raf) cancelAnimationFrame(a.raf);
     if (a.live) a.live.remove();
@@ -1264,6 +1519,18 @@ export class Editor {
       const widths = t === 'hl' ? [8, 14, 22] : [1, 2, 3.5, 6];
       html += '<div class="opt-row">' + widths.map(w => `<button class="width${opt.width === w ? ' on' : ''}" data-width="${w}"><i style="--w:${Math.min(w * (t === 'hl' ? 1 : 2), 22)}px"></i></button>`).join('') + '</div>';
     }
+    if (t === 'pen' || t === 'hl') {
+      const opt = t === 'hl' ? this.tools.hl : this.tools.pen;
+      const isFav = this.tools.favs.some(f => f.t === t && f.c === opt.color && f.w === opt.width);
+      html += `<div class="opt-row opt-text">
+        <button class="seg${this.tools.shapeSnap ? ' on' : ''}" data-snap>도형 보정 ${this.tools.shapeSnap ? '켜짐' : '꺼짐'}</button>
+        <button class="seg" data-addfav ${isFav || this.tools.favs.length >= 4 ? 'disabled' : ''}>★ 즐겨찾기에 추가</button></div>`;
+      html += '<p class="opt-hint">선을 긋고 펜을 잠깐 멈추면 직선·원·사각형으로 바뀝니다</p>';
+    }
+    if (this.tools.favs.length && (t === 'pen' || t === 'hl')) {
+      html += '<div class="opt-row fav-edit">' + this.tools.favs.map((f, i) =>
+        `<span class="fav-chip"><i style="--c:${f.c};--w:${Math.min(f.w * (f.t === 'hl' ? 1 : 2), 18)}px" class="${f.t}"></i><button data-delfav="${i}" aria-label="즐겨찾기 삭제">✕</button></span>`).join('') + '</div>';
+    }
     if (t === 'text') {
       html += '<div class="opt-row">' + [12, 18, 24, 32].map(s => `<button class="size${this.tools.text.size === s ? ' on' : ''}" data-size="${s}">${s}</button>`).join('') + '</div>';
     }
@@ -1282,6 +1549,34 @@ export class Editor {
     o.querySelectorAll('[data-size]').forEach(b => b.onclick = () => { this.tools.text.size = Number(b.dataset.size); this.afterOpt(); });
     o.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { this.tools.eraser.mode = b.dataset.mode; this.afterOpt(); });
     o.querySelectorAll('[data-esize]').forEach(b => b.onclick = () => { this.tools.eraser.size = Number(b.dataset.esize); this.afterOpt(); });
+    const snap = o.querySelector('[data-snap]');
+    if (snap) snap.onclick = () => { this.tools.shapeSnap = !this.tools.shapeSnap; this.afterOpt(); };
+    const add = o.querySelector('[data-addfav]');
+    if (add) add.onclick = () => {
+      this.tools.favs.push({ t, c: opt.color, w: opt.width });
+      this.afterOpt();
+      this.toast('도구 막대에 즐겨찾는 펜을 추가했습니다');
+    };
+    o.querySelectorAll('[data-delfav]').forEach(b => b.onclick = () => { this.tools.favs.splice(Number(b.dataset.delfav), 1); this.afterOpt(); });
+  }
+
+  // 도구 막대의 즐겨찾는 펜 버튼
+  renderFavs() {
+    const box = this.root.querySelector('.favs');
+    const t = this.tools.tool;
+    box.innerHTML = this.tools.favs.map((f, i) => {
+      const opt = f.t === 'hl' ? this.tools.hl : this.tools.pen;
+      const on = t === f.t && opt.color === f.c && opt.width === f.w;
+      return `<button class="fav${on ? ' on' : ''}" data-fav="${i}" title="${f.t === 'hl' ? '형광펜' : '펜'}"><i class="${f.t}" style="--c:${f.c};--w:${Math.min(f.w * (f.t === 'hl' ? 1 : 2), 16)}px"></i></button>`;
+    }).join('');
+    box.hidden = !this.tools.favs.length;
+    box.querySelectorAll('[data-fav]').forEach(b => b.onclick = () => {
+      const f = this.tools.favs[Number(b.dataset.fav)];
+      const opt = f.t === 'hl' ? this.tools.hl : this.tools.pen;
+      opt.color = f.c;
+      opt.width = f.w;
+      this.setTool(f.t);
+    });
   }
 
   afterOpt() {
@@ -1299,6 +1594,8 @@ export class Editor {
     R.querySelector('[data-act="pen-only"]').classList.toggle('on', this.tools.penOnly);
     R.dataset.tool = t;
     R.dataset.penOnly = this.tools.penOnly ? '1' : '0';
+    this.renderFavs();
+    this.updatePastePill();
     this.updateUndoUi();
     this.updatePageLabel();
   }
@@ -1336,37 +1633,70 @@ export class Editor {
   }
 
   // ---------- 페이지 추가 / 삭제 / 이름 ----------
-  addPage() {
+  addPage() { this.addPageAfter(this.currentIndex()); }
+
+  addPageAfter(i) {
     this.root.querySelector('.more-menu').hidden = true;
-    const i = this.currentIndex();
     const cur = this.note.pages[i];
     const bgSel = this.root.querySelector('.more-menu select');
     const pg = { id: uid(), w: cur.w, h: cur.h, pdf: null, bg: bgSel ? bgSel.value : 'plain' };
     this.note.pages.splice(i + 1, 0, pg);
-    this.buildPages();
-    const el = this.pageEls.get(pg.id);
-    this.scroller.scrollTop = el.offsetTop - PAGE_GAP;
-    this.undoStack = [];
-    this.redoStack = [];
-    this.scheduleSave();
-    this.updateUi();
+    this.afterPagesChanged();
+    this.goToPage(i + 1);
     this.toast(`${i + 2}쪽에 빈 페이지를 추가했습니다`);
   }
 
-  deletePage() {
+  deletePage() { this.deletePageAt(this.currentIndex()); }
+
+  deletePageAt(i) {
     this.root.querySelector('.more-menu').hidden = true;
     if (this.note.pages.length <= 1) return this.toast('마지막 페이지는 지울 수 없습니다');
-    const i = this.currentIndex();
     if (!confirm(`${i + 1}쪽을 삭제할까요? (필기 포함, 되돌릴 수 없음)`)) return;
     const [pg] = this.note.pages.splice(i, 1);
     delete this.ink[pg.id];
-    const top = this.scroller.scrollTop;
-    this.buildPages();
-    this.scroller.scrollTop = top;
     this.undoStack = this.undoStack.filter(a => a.pid !== pg.id);
     this.redoStack = this.redoStack.filter(a => a.pid !== pg.id);
+    const top = this.scroller.scrollTop;
+    this.afterPagesChanged();
+    this.scroller.scrollTop = top;
+  }
+
+  movePage(i, dir) {
+    const j = i + dir;
+    const pages = this.note.pages;
+    if (j < 0 || j >= pages.length) return;
+    [pages[i], pages[j]] = [pages[j], pages[i]];
+    this.afterPagesChanged();
+    this.goToPage(j);
+  }
+
+  duplicatePage(i) {
+    const src = this.note.pages[i];
+    const pg = Object.assign({}, src, { id: uid() });
+    this.note.pages.splice(i + 1, 0, pg);
+    const ink = this.ink[src.id];
+    if (ink) {
+      const copy = JSON.parse(JSON.stringify(ink));
+      for (const k of ['strokes', 'texts', 'images']) copy[k].forEach(o => { o.id = uid(); });
+      this.ink[pg.id] = copy;
+    }
+    this.afterPagesChanged();
+    this.goToPage(i + 1);
+    this.toast(`${i + 1}쪽을 복제했습니다`);
+  }
+
+  afterPagesChanged() {
+    this.buildPages();
     this.scheduleSave();
     this.updateUi();
+    if (this.panel) this.panel.rebuild();
+  }
+
+  goToPage(i) {
+    const pg = this.note.pages[i];
+    const el = pg && this.pageEls.get(pg.id);
+    if (el) this.scroller.scrollTop = el.offsetTop - PAGE_GAP;
+    this.updatePageLabel();
   }
 
   rename() {
