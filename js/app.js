@@ -36,6 +36,8 @@ const editor = new Editor(editorEl, {
 });
 
 async function openNote(id) {
+  const rec = await db.getNote(id);
+  if (rec && !rec.deleted) { rec.openedAt = Date.now(); await db.putNote(rec); }
   library.hidden = true;
   editorEl.hidden = false;
   editor.setSaveState('');
@@ -109,7 +111,7 @@ async function renderLibrary() {
   bar.innerHTML = '';
   const chip = (id, label, count, icon) => {
     const b = document.createElement('button');
-    b.className = 'chip' + (view === id ? ' on' : '') + (id === 'trash' ? ' trash' : '');
+    b.className = 'chip' + (view === id ? ' on' : '') + (id === 'trash' ? ' trash' : '') + (icon === 'folder' ? ' folder' : '');
     b.innerHTML = (icon ? svgIcon(icon) : '') + `<span></span>` + (count != null ? `<em>${count}</em>` : '');
     b.querySelector('span').textContent = label;
     b.onclick = () => {
@@ -139,7 +141,8 @@ async function renderLibrary() {
   chip('trash', '휴지통', trashed.length || null, 'trash');
 
   // 노트 목록 (검색어가 있으면 모든 폴더에서 이름으로 찾기)
-  const q = $('#lib-search').value.trim().toLowerCase();
+  const rawQ = $('#lib-search').value.trim();
+  const q = rawQ.toLowerCase();
   let list;
   if (q) list = (view === 'trash' ? trashed : live).filter(n => n.name.toLowerCase().includes(q));
   else if (view === 'trash') list = trashed.sort((a, b) => b.trashedAt - a.trashedAt);
@@ -150,41 +153,211 @@ async function renderLibrary() {
   $('.actions').hidden = view === 'trash';
   $('#trash-head').hidden = view !== 'trash';
   $('#empty-trash').disabled = !trashed.length;
-  const grid = $('#grid');
-  grid.innerHTML = '';
+  $('#title-results').hidden = !q || !list.length;
+
+  // 최근에 연 노트 (검색·휴지통이 아닐 때)
+  const recent = live.filter(n => n.openedAt && (view === 'all' || n.folderId === view)).sort((a, b) => b.openedAt - a.openedAt).slice(0, 4);
+  const recentBox = $('#recent');
+  recentBox.hidden = !!q || view === 'trash' || !recent.length || list.length < 5;
+  if (!recentBox.hidden) {
+    const rl = recentBox.querySelector('.recent-list');
+    rl.innerHTML = '';
+    for (const n of recent) {
+      const idx = n.lastPage ? n.pages.findIndex(p => p.id === n.lastPage) : -1;
+      const b = document.createElement('button');
+      b.className = 'recent-item';
+      b.innerHTML = `<span class="rthumb"></span><span class="rtext"><b></b><small></small></span>`;
+      if (n.thumb) b.querySelector('.rthumb').style.backgroundImage = `url(${n.thumb})`;
+      b.querySelector('b').textContent = n.name;
+      b.querySelector('small').textContent = idx > 0 ? `${idx + 1}쪽에서 이어 보기` : `${n.pages.length}쪽`;
+      b.onclick = () => openNote(n.id);
+      rl.appendChild(b);
+    }
+  }
+
   const empty = $('#empty');
   empty.hidden = list.length > 0;
-  empty.querySelector('p').textContent = q ? `'${$('#lib-search').value.trim()}'에 맞는 노트가 없습니다.` : view === 'trash' ? '휴지통이 비어 있습니다.' : '아직 노트가 없습니다.';
+  empty.querySelector('p').textContent = q ? `제목에 '${rawQ}'이(가) 들어간 노트가 없습니다.` : view === 'trash' ? '휴지통이 비어 있습니다.' : '아직 노트가 없습니다.';
   empty.querySelector('.muted').hidden = view === 'trash' || !!q;
+  libState = { list, folders, q };
+  layoutCards();
+  if (q.replace(/\s/g, '').length >= 2 && view !== 'trash') searchContents(rawQ, live);
+  else { searchToken = {}; $('#content-results').hidden = true; }
+}
+
+// ---------- 벽돌(메이슨리) 카드 배치 ----------
+let libState = { list: [], folders: [], q: '' };
+let lastCols = 0;
+
+function makeCard(n, folders, q) {
   const folderName = id => (folders.find(f => f.id === id) || {}).name;
-  for (const n of list) {
-    const card = document.createElement('div');
-    card.className = 'card' + (view === 'trash' ? ' in-trash' : '');
-    card.innerHTML = `<div class="cover"></div><div class="name"></div><div class="date"></div>
-      <button class="card-menu" aria-label="메뉴">${svgIcon('dots')}</button>`;
-    if (n.thumb) card.querySelector('.cover').style.backgroundImage = `url(${n.thumb})`;
-    card.querySelector('.name').textContent = n.name;
-    let info;
-    if (view === 'trash') {
-      const left = Math.max(0, TRASH_DAYS - Math.floor((Date.now() - n.trashedAt) / 86400_000));
-      info = `${left}일 후 완전 삭제`;
-    } else {
-      info = `${fmtDate(n.updatedAt)} · ${n.pages.length}쪽`;
-      if ((view === 'all' || q) && folderName(n.folderId)) info += ` · ${folderName(n.folderId)}`;
-    }
-    card.querySelector('.date').textContent = info;
-    card.onclick = e => {
-      if (e.target.closest('.card-menu')) return;
-      if (view === 'trash') return cardMenu(n, card.querySelector('.card-menu'), folders);
-      openNote(n.id);
-    };
-    card.querySelector('.card-menu').onclick = e => { e.stopPropagation(); cardMenu(n, e.currentTarget, folders); };
-    grid.appendChild(card);
+  const card = document.createElement('div');
+  card.className = 'card' + (n.trashedAt ? ' in-trash' : '');
+  const pg = n.pages && n.pages[0];
+  const ratio = pg ? `${pg.w} / ${pg.h}` : '3 / 4';
+  card.innerHTML = `<div class="cover" style="aspect-ratio:${ratio}"><img alt="" loading="lazy" draggable="false"></div>
+    <button class="card-menu" aria-label="메뉴">${svgIcon('dots')}</button>
+    <div class="name"></div><div class="date"></div>`;
+  const img = card.querySelector('img');
+  if (n.thumb) img.src = n.thumb; else img.remove();
+  card.querySelector('.name').textContent = n.name;
+  let info;
+  if (n.trashedAt) {
+    const left = Math.max(0, TRASH_DAYS - Math.floor((Date.now() - n.trashedAt) / 86400_000));
+    info = `${left}일 후 완전 삭제`;
+  } else {
+    info = `${fmtDate(n.updatedAt)} · ${n.pages.length}쪽`;
+    if ((view === 'all' || q) && folderName(n.folderId)) info += ` · ${folderName(n.folderId)}`;
   }
+  card.querySelector('.date').textContent = info;
+  card.onclick = e => {
+    if (e.target.closest('.card-menu')) return;
+    if (n.trashedAt) return cardMenu(n, card.querySelector('.card-menu'), folders);
+    openNote(n.id);
+  };
+  card.querySelector('.card-menu').onclick = e => { e.stopPropagation(); cardMenu(n, e.currentTarget, folders); };
+  return card;
+}
+
+function layoutCards() {
+  const grid = $('#grid');
+  const { list, folders, q } = libState;
+  const w = grid.clientWidth || library.clientWidth - 32;
+  const gap = w < 600 ? 12 : 18;
+  const target = w < 600 ? 150 : 210;
+  const cols = Math.max(2, Math.floor((w + gap) / (target + gap)));
+  lastCols = cols;
+  const colW = (w - gap * (cols - 1)) / cols;
+  grid.innerHTML = '';
+  grid.style.gap = gap + 'px';
+  const colEls = [], heights = [];
+  for (let i = 0; i < cols; i++) {
+    const c = document.createElement('div');
+    c.className = 'mcol';
+    c.style.gap = gap + 4 + 'px';
+    grid.appendChild(c);
+    colEls.push(c);
+    heights.push(0);
+  }
+  // 가장 짧은 줄에 다음 카드를 넣어 핀터레스트처럼 쌓음
+  for (const n of list) {
+    const pg = n.pages && n.pages[0];
+    const h = colW * (pg ? pg.h / pg.w : 4 / 3) + 52;
+    const i = heights.indexOf(Math.min(...heights));
+    colEls[i].appendChild(makeCard(n, folders, q));
+    heights[i] += h + gap;
+  }
+}
+new ResizeObserver(() => {
+  if (library.hidden) return;
+  const w = $('#grid').clientWidth;
+  const gap = w < 600 ? 12 : 18;
+  const cols = Math.max(2, Math.floor((w + gap) / ((w < 600 ? 150 : 210) + gap)));
+  if (cols !== lastCols) layoutCards();
+}).observe($('#grid'));
+
+// ---------- 노트 내용 검색 (PDF 글자 + 직접 쓴 텍스트) ----------
+const pdfTextCache = new Map();   // noteId → [{ pdf, raw, norm, map }]
+let searchToken = {};
+
+function normWithMap(raw) {
+  let norm = '';
+  const map = [];
+  for (let i = 0; i < raw.length; i++) {
+    if (/\s/.test(raw[i])) continue;
+    norm += raw[i].toLowerCase();
+    map.push(i);
+  }
+  return { norm, map };
+}
+
+async function pdfTexts(note) {
+  if (pdfTextCache.has(note.id)) return pdfTextCache.get(note.id);
+  const blob = await db.getPdf(note.id);
+  const out = [];
+  if (blob) {
+    const doc = await pdfjsLib.getDocument({ data: new Uint8Array(await blob.arrayBuffer()) }).promise;
+    for (let i = 1; i <= doc.numPages; i++) {
+      const tc = await (await doc.getPage(i)).getTextContent();
+      const raw = tc.items.map(it => it.str + (it.hasEOL ? ' ' : '')).join('');
+      out.push(Object.assign({ pdf: i - 1, raw }, normWithMap(raw)));
+    }
+    doc.destroy();
+  }
+  pdfTextCache.set(note.id, out);
+  return out;
+}
+
+async function searchContents(rawQ, notes) {
+  const token = (searchToken = {});
+  const box = $('#content-results');
+  const listEl = box.querySelector('.cr-list');
+  const status = box.querySelector('.cr-status');
+  const nq = rawQ.replace(/\s+/g, '').toLowerCase();
+  listEl.innerHTML = '';
+  box.hidden = false;
+  let found = 0;
+  for (let k = 0; k < notes.length; k++) {
+    const n = notes[k];
+    status.textContent = `찾는 중… ${k + 1} / ${notes.length}`;
+    const hits = [];
+    try {
+      if (n.hasPdf) {
+        for (const pt of await pdfTexts(n)) {
+          const at = pt.norm.indexOf(nq);
+          if (at < 0) continue;
+          const i = n.pages.findIndex(p => p.pdf === pt.pdf);
+          if (i < 0) continue;
+          const s0 = pt.map[at], s1 = pt.map[at + nq.length - 1] + 1;
+          hits.push({ i, before: pt.raw.slice(Math.max(0, s0 - 24), s0), match: pt.raw.slice(s0, s1), after: pt.raw.slice(s1, s1 + 36) });
+          if (hits.length >= 3) break;
+        }
+      }
+      if (hits.length < 3) {
+        const ink = await db.getInk(n.id);
+        n.pages.forEach((p, i) => {
+          for (const t of ((ink[p.id] || {}).texts || [])) {
+            if (hits.length >= 3) return;
+            const { norm, map } = normWithMap(t.text);
+            const at = norm.indexOf(nq);
+            if (at < 0) continue;
+            const s0 = map[at], s1 = map[at + nq.length - 1] + 1;
+            hits.push({ i, before: t.text.slice(Math.max(0, s0 - 24), s0), match: t.text.slice(s0, s1), after: t.text.slice(s1, s1 + 36) });
+          }
+        });
+      }
+    } catch (e) { console.warn('내용 검색', n.name, e); }
+    if (token !== searchToken) return;
+    for (const h of hits) {
+      found++;
+      const row = document.createElement('button');
+      row.className = 'cr-row';
+      row.innerHTML = `<span class="rthumb"></span><span class="rtext"><b></b><small><em></em><span class="snip"></span></small></span>`;
+      if (n.thumb) row.querySelector('.rthumb').style.backgroundImage = `url(${n.thumb})`;
+      row.querySelector('b').textContent = n.name;
+      row.querySelector('em').textContent = `${h.i + 1}쪽`;
+      const snip = row.querySelector('.snip');
+      snip.append('…' + h.before);
+      const mark = document.createElement('mark');
+      mark.textContent = h.match;
+      snip.append(mark, h.after + '…');
+      row.onclick = async () => {
+        const cur = await db.getNote(n.id);
+        cur.lastPage = cur.pages[h.i].id;   // 그 쪽에서 열기
+        await db.putNote(cur);
+        openNote(n.id);
+      };
+      listEl.appendChild(row);
+    }
+  }
+  if (token !== searchToken) return;
+  status.textContent = found ? `${found}곳` : '';
+  if (!found) box.hidden = true;
+  if (found && !libState.list.length) $('#empty').hidden = true;
 }
 
 function closePopups() { document.querySelectorAll('.popup').forEach(p => p.remove()); }
-document.addEventListener('pointerdown', e => { if (!e.target.closest('.popup')) closePopups(); });
+document.addEventListener('pointerdown', e => { if (!e.target.closest('.popup') && !e.target.closest('#fab')) closePopups(); });
 
 function popup(anchor, html) {
   closePopups();
@@ -381,17 +554,28 @@ $('#pdf-input').onchange = e => {
   if (files.length) importFiles(files);
 };
 
-$('#new-blank').onclick = e => {
+$('#fab').onclick = e => {
+  e.stopPropagation();
+  if (document.querySelector('.popup.fab-menu')) return closePopups();
   closePopups();
   const m = document.createElement('div');
-  m.className = 'popup';
-  m.innerHTML = '<button data-bg="plain">무지 노트</button><button data-bg="lined">줄 노트</button><button data-bg="grid">모눈 노트</button><button data-bg="dot">점 노트</button>';
+  m.className = 'popup fab-menu';
+  m.innerHTML = `<button data-act="pdf"><b>PDF 불러오기</b><small>파일 앱·다운로드에서 고르기</small></button>
+    <div class="fab-sep">새 노트</div>
+    <div class="paper-grid">
+      <button data-bg="plain"><i class="paper plain"></i>무지</button>
+      <button data-bg="lined"><i class="paper lined"></i>줄</button>
+      <button data-bg="grid"><i class="paper grid"></i>모눈</button>
+      <button data-bg="dot"><i class="paper dot"></i>점</button>
+    </div>`;
   document.body.appendChild(m);
   const r = e.currentTarget.getBoundingClientRect();
-  m.style.top = r.bottom + 6 + 'px';
-  m.style.left = r.left + 'px';
+  m.style.left = Math.max(8, r.right - m.offsetWidth) + 'px';
+  m.style.top = Math.max(8, r.top - m.offsetHeight - 10) + 'px';
   m.onclick = async ev => {
-    const bg = ev.target.dataset.bg;
+    if (ev.target.closest('[data-act="pdf"]')) { closePopups(); return $('#pdf-input').click(); }
+    const bgBtn = ev.target.closest('[data-bg]');
+    const bg = bgBtn && bgBtn.dataset.bg;
     if (!bg) return;
     closePopups();
     const id = uid();
@@ -494,7 +678,7 @@ drive.onChange(s => {
 // 구글 토큰은 1시간마다 만료됨. 서재에서 노트를 열거나 닫는 탭(사용자 동작)에 맞춰
 // 조용히 갱신해서 따로 로그인 버튼을 누를 일이 거의 없게 함
 document.addEventListener('click', e => {
-  if (!e.target.closest('.card, [data-act="back"], #new-blank')) return;
+  if (!e.target.closest('.card, .recent-item, .cr-row, [data-act="back"], #fab')) return;
   if (!drive.needsRenew() || !drive.getClientId() || !navigator.onLine) return;
   drive.signIn().then(() => runSync()).catch(err => console.warn('renew', err));
 }, true);

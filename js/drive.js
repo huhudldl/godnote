@@ -337,6 +337,7 @@ async function pullNote(remote, local, ctx, force) {
   }
   // 썸네일·마지막 페이지는 기기별 정보라 이 기기 것을 유지
   if (local && local.thumb && !note.thumb) note.thumb = local.thumb;
+  if (local && local.openedAt) note.openedAt = Math.max(local.openedAt, note.openedAt || 0);
   const localInk = local && !local.deleted ? await db.getInk(note.id) : null;
   await db.putInk(note.id, await unpackInk(data.ink || {}, ctx, localInk));
   await db.putNote(note);

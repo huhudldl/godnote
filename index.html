@@ -22,8 +22,10 @@
 <section id="library" class="view">
   <header class="topbar">
     <h1>갓 노트</h1>
-    <div class="spacer"></div>
-    <label class="lib-search"><svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg><input id="lib-search" type="search" placeholder="노트 검색" autocomplete="off"></label>
+    <label class="lib-search">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.2-4.2"/></svg>
+      <input id="lib-search" type="search" placeholder="노트 제목, PDF 속 글자까지 검색" autocomplete="off" enterkeyhint="search">
+    </label>
     <button id="sync-btn" class="sync-btn" title="동기화"><span class="dot"></span><span class="sync-text">로그인</span></button>
     <button id="settings-btn" class="icon-btn" title="설정" aria-label="설정">
       <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>
@@ -34,21 +36,25 @@
     <p class="muted small">휴지통의 노트는 30일 뒤 자동으로 완전히 삭제됩니다. 노트를 누르면 복원할 수 있습니다.</p>
     <button id="empty-trash" class="btn">휴지통 비우기</button>
   </div>
-  <div class="actions">
-    <label class="big-btn primary">
-      <svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5M12 12v6M9 15h6"/></svg>
-      PDF 불러오기
-      <input id="pdf-input" type="file" accept="application/pdf,.pdf" multiple hidden>
-    </label>
-    <button id="new-blank" class="big-btn">
-      <svg viewBox="0 0 24 24"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M12 9v6M9 12h6"/></svg>
-      새 노트
-    </button>
-  </div>
-  <div id="grid" class="grid"></div>
+  <section id="recent" class="recent" hidden>
+    <h3 class="sec-title">최근에 연 노트</h3>
+    <div class="recent-list"></div>
+  </section>
+  <h3 id="title-results" class="sec-title" hidden>제목에서 찾음</h3>
+  <div id="grid" class="grid masonry"></div>
+  <section id="content-results" class="content-results" hidden>
+    <h3 class="sec-title">노트 내용에서 찾음 <span class="cr-status"></span></h3>
+    <div class="cr-list"></div>
+  </section>
   <div id="empty" class="empty" hidden>
     <p>아직 노트가 없습니다.</p>
-    <p class="muted">PDF를 불러오거나 새 노트를 만들어 보세요. 파일을 이 화면에 끌어다 놓아도 됩니다.</p>
+    <p class="muted">오른쪽 아래 + 버튼으로 PDF를 불러오거나 새 노트를 만들어 보세요. 맥에서는 파일을 이 화면에 끌어다 놓아도 됩니다.</p>
+  </div>
+  <div class="actions">
+    <button id="fab" class="fab" aria-label="새로 만들기" title="PDF 불러오기 · 새 노트">
+      <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>
+    </button>
+    <input id="pdf-input" type="file" accept="application/pdf,.pdf" multiple hidden>
   </div>
 </section>
 
