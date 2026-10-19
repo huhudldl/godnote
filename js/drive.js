@@ -380,6 +380,8 @@ async function cleanupAssets(ctx) {
     const ink = await db.getInk(n.id);
     for (const pid in ink) for (const im of (ink[pid].images || [])) {
       if (im.src && im.src.startsWith('data:')) used.add(await hashOf(im.src));
+      // 아직 내려받지 못한 이미지도 쓰는 중이므로 지우지 않음
+      else if (im.src && im.src.startsWith('asset:')) used.add(im.src.slice(6));
     }
   }
   const dayAgo = Date.now() - 86400_000;
