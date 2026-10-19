@@ -610,12 +610,16 @@ function scheduleSync(ms) {
 
 async function runSync() {
   clearTimeout(syncTimer);
-  await editor.flush();
-  await drive.sync(async (pulledIds, conflicts) => {
-    if (conflicts) toast(`두 기기에서 같은 노트를 고쳐서 '충돌 사본' ${conflicts}개를 만들었습니다. 서재에서 확인하세요`, 6000);
-    if (editor.note && pulledIds.includes(editor.note.id)) reloadEditor();
-    if (!library.hidden) renderLibrary();
-  });
+  try {
+    await editor.flush();
+    await drive.sync(async (pulledIds, conflicts) => {
+      if (conflicts) toast(`두 기기에서 같은 노트를 고쳐서 '충돌 사본' ${conflicts}개를 만들었습니다. 서재에서 확인하세요`, 6000);
+      if (editor.note && pulledIds.includes(editor.note.id)) reloadEditor().catch(e => console.error(e));
+      if (!library.hidden) renderLibrary();
+    });
+  } catch (e) {
+    console.error('동기화', e);
+  }
 }
 
 // 다른 기기 내용으로 편집 화면 갱신. 아직 저장 안 된 필기가 있으면 사본으로 남김
@@ -705,13 +709,15 @@ $('#save-client').onclick = () => {
   renderAccount();
 };
 
+const esc = v => String(v || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
 function renderAccount() {
   const box = $('#account-box');
   if (!box) return;
   const s = drive.state;
   const signed = drive.hasValidToken();
   box.innerHTML = `<div class="account">
-    <div>${signed ? `<b>${s.email || '구글 계정'}</b> 으로 연결됨` : s.email ? `<b>${s.email}</b> — 다시 로그인이 필요합니다` : '구글 드라이브에 연결되어 있지 않습니다'}</div>
+    <div>${signed ? `<b>${esc(s.email) || '구글 계정'}</b> 으로 연결됨` : s.email ? `<b>${esc(s.email)}</b> — 다시 로그인이 필요합니다` : '구글 드라이브에 연결되어 있지 않습니다'}</div>
     ${s.lastSync ? `<div class="muted small">마지막 동기화: ${new Date(s.lastSync).toLocaleString('ko-KR')}</div>` : ''}
     <div class="btns">
       ${signed ? '<button type="button" class="btn primary" data-a="sync">지금 동기화</button><button type="button" class="btn" data-a="out">로그아웃</button>'

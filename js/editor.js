@@ -6,6 +6,9 @@ import { SearchBar } from './search.js';
 const MAX_CANVAS_PIXELS = 12_000_000; // iPad 사파리 캔버스 한도 안쪽
 const PAGE_GAP = 16;
 const LS_TOOLS = 'godnote.tools';
+const HL_ALPHA = 0.5;       // 형광펜 진하기. 형광펜 층은 화면에서 '곱하기'로 겹쳐 아래 글자가 그대로 보임
+const HL_HOLD_MS = 550;     // 형광펜 끝에서 이만큼 멈추면 직선으로
+const PEN_HOLD_MS = 700;    // 펜 끝에서 이만큼 멈추면 도형으로
 
 const DEFAULT_TOOLS = {
   tool: 'pen',
@@ -15,6 +18,7 @@ const DEFAULT_TOOLS = {
   text: { size: 18 },
   penOnly: false,
   shapeSnap: true,   // 선 끝에서 잠깐 멈추면 직선·원·사각형으로 보정
+  hlStraight: true,  // 형광펜 끝에서 잠깐 멈추면 반듯한 직선으로
   favs: [],          // 즐겨찾는 펜 [{ t, c, w }]
   pillPos: 'bottom', // 알약 툴바 위치: bottom | top
 };
@@ -79,6 +83,40 @@ export function recognizeShape(p) {
   return null;
 }
 
+// 형광펜 직선: 시작점→끝점. 거의 가로(세로)면 흔들린 높이의 평균으로 수평(수직)을 맞춤
+const LOCK_DEG = 12;
+export function straightLine(p) {
+  const n = p.length / 3;
+  if (n < 2) return null;
+  const x0 = p[0], y0 = p[1], x1 = p[(n - 1) * 3], y1 = p[(n - 1) * 3 + 1];
+  if (Math.hypot(x1 - x0, y1 - y0) < 12) return null;
+  let sx = 0, sy = 0, pr = 0;
+  for (let i = 0; i < n; i++) { sx += p[i * 3]; sy += p[i * 3 + 1]; pr += p[i * 3 + 2]; }
+  pr = Math.round(pr / n * 100) / 100;
+  const deg = Math.abs(Math.atan2(y1 - y0, x1 - x0) * 180 / Math.PI);
+  let lock = null, a = [x0, y0], b = [x1, y1];
+  if (deg < LOCK_DEG || deg > 180 - LOCK_DEG) { lock = 'h'; a[1] = b[1] = sy / n; }
+  else if (Math.abs(deg - 90) < LOCK_DEG) { lock = 'v'; a[0] = b[0] = sx / n; }
+  return { p: [r1(a[0]), r1(a[1]), pr, r1(b[0]), r1(b[1]), pr], lock };
+}
+
+// 직선·도형(점 몇 개)을 촘촘한 점으로 바꿈: 부분 지우기로 가운데를 지울 수 있게
+function densify(s) {
+  const p = s.p, n = p.length / 3, out = [];
+  const segs = s.closed ? n : n - 1;
+  for (let i = 0; i < segs; i++) {
+    const a = i * 3, b = ((i + 1) % n) * 3;
+    const steps = Math.max(1, Math.ceil(Math.hypot(p[b] - p[a], p[b + 1] - p[a + 1]) / 2));
+    for (let k = 0; k < steps; k++) {
+      const t = k / steps;
+      out.push(r1(p[a] + (p[b] - p[a]) * t), r1(p[a + 1] + (p[b + 1] - p[a + 1]) * t), p[a + 2]);
+    }
+  }
+  const last = s.closed ? 0 : (n - 1) * 3;
+  out.push(p[last], p[last + 1], p[last + 2]);
+  return out;
+}
+
 // 점이 다각형(평평한 [x,y,x,y…]) 안에 있는지
 function inPoly(x, y, poly) {
   let inside = false;
@@ -98,7 +136,7 @@ export function drawStroke(ctx, s) {
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
     ctx.strokeStyle = s.c;
-    if (s.t === 'hl') { ctx.globalAlpha = 0.38; ctx.globalCompositeOperation = 'multiply'; ctx.lineWidth = s.w; }
+    if (s.t === 'hl') { ctx.globalAlpha = HL_ALPHA; ctx.globalCompositeOperation = 'multiply'; ctx.lineWidth = s.w; }
     else ctx.lineWidth = s.w * (0.35 + 1.3 * (p[2] || 0.5));
     ctx.beginPath();
     ctx.moveTo(p[0], p[1]);
@@ -114,7 +152,7 @@ export function drawStroke(ctx, s) {
   ctx.fillStyle = s.c;
   if (s.t === 'hl') {
     ctx.save();
-    ctx.globalAlpha = 0.38;
+    ctx.globalAlpha = HL_ALPHA;
     ctx.globalCompositeOperation = 'multiply';
     ctx.lineWidth = s.w;
     ctx.beginPath();
@@ -151,10 +189,17 @@ export function drawStroke(ctx, s) {
   }
 }
 
+export const hasHighlights = pageInk => !!pageInk && pageInk.strokes.some(s => s.t === 'hl');
+export function drawHighlights(ctx, pageInk) {
+  if (pageInk) for (const s of pageInk.strokes) if (s.t === 'hl') drawStroke(ctx, s);
+}
+export function drawPens(ctx, pageInk) {
+  if (pageInk) for (const s of pageInk.strokes) if (s.t !== 'hl') drawStroke(ctx, s);
+}
+// 불투명한 바탕(썸네일·내보내기) 위에 바로 그릴 때: 형광펜 → 펜
 export function drawPageInk(ctx, pageInk) {
-  if (!pageInk) return;
-  for (const s of pageInk.strokes) if (s.t === 'hl') drawStroke(ctx, s);
-  for (const s of pageInk.strokes) if (s.t !== 'hl') drawStroke(ctx, s);
+  drawHighlights(ctx, pageInk);
+  drawPens(ctx, pageInk);
 }
 
 // CSS(pre-wrap, line-height 1.3)와 비슷하게 줄바꿈
@@ -246,6 +291,7 @@ export class Editor {
   async open(id) {
     this.note = await db.getNote(id);
     this.ink = await db.getInk(id);
+    this.dbStamp = this.note.updatedAt || 0;   // 기기에 마지막으로 저장(또는 읽은) 버전
     this.undoStack = [];
     this.redoStack = [];
     this.srcPool = null;
@@ -269,6 +315,13 @@ export class Editor {
     this.updateUi();
   }
 
+  // 쓰는 중이면 펜을 뗀 뒤에 다시 불러옴
+  reloadWhenIdle() {
+    if (!this.note) return;
+    if (this.active) { setTimeout(() => this.reloadWhenIdle(), 300); return; }
+    this.reload().catch(e => console.error(e));
+  }
+
   async reload() {
     if (!this.note) return;
     const top = this.scroller.scrollTop;
@@ -276,6 +329,7 @@ export class Editor {
     if (!note || note.deleted) { this.toast('다른 기기에서 삭제된 노트입니다'); return this.close(); }
     this.note = note;
     this.ink = await db.getInk(note.id);
+    this.dbStamp = note.updatedAt || 0;
     if (note.hasPdf && !this.pdf) {
       const blob = await db.getPdf(note.id);
       if (blob) this.pdf = await pdfjsLib.getDocument({ data: new Uint8Array(await blob.arrayBuffer()) }).promise;
@@ -295,7 +349,10 @@ export class Editor {
     this.clearLasso();
     this.deselect();
     if (this.note && this.note.pages.length) this.note.lastPage = this.currentPageId();
-    await this.flush();
+    this.closing = true;
+    const ok = await this.flush();
+    this.closing = false;
+    if (!ok && !confirm('필기를 기기에 저장하지 못했습니다 (저장 공간 부족일 수 있어요).\n그래도 닫을까요? 닫으면 마지막 변경이 사라질 수 있습니다.')) return;
     const note = this.note;
     if (note) {
       try {
@@ -332,15 +389,36 @@ export class Editor {
     this.saveTimer = setTimeout(() => this.flush(), 500);
   }
 
+  // 저장 대기 중인 내용을 기기(IndexedDB)에 씀. 실패하면 false 를 돌려주고 잠시 뒤 다시 시도
   async flush() {
-    if (!this.saveTimer || !this.note) return;
+    if (!this.saveTimer || !this.note) return true;
     clearTimeout(this.saveTimer);
     this.saveTimer = null;
     const note = this.note;
-    if (note.pages.length) note.lastPage = this.currentPageId();
-    await db.putInk(note.id, this.ink);
-    await db.putNote(note);
+    try {
+      if (note.pages.length) note.lastPage = this.currentPageId();
+      // 그사이 동기화가 다른 기기 내용으로 바꿔 놓았으면 덮어쓰지 않고 지금 내용은 사본으로 남김
+      const cur = await db.getNote(note.id);
+      if (cur && (cur.deleted || (cur.updatedAt || 0) !== this.dbStamp)) {
+        await this.saveAsCopy();
+        this.toast("다른 기기에서 바뀐 내용이 있어, 방금 쓴 내용은 '충돌 사본'으로 남겼습니다", 6000);
+        if (!this.closing) this.reloadWhenIdle();
+        return true;
+      }
+      await db.putInk(note.id, this.ink);
+      await db.putNote(note);
+      this.dbStamp = note.updatedAt || 0;
+    } catch (e) {
+      console.error('저장 실패', e);
+      if (this.note !== note) return false;
+      this.setSaveState('기기에 저장하지 못했습니다 · 다시 시도합니다', 'err');
+      if (!this.saveFailedShown) { this.saveFailedShown = true; this.toast('필기를 저장하지 못했습니다. 기기 저장 공간을 확인해 주세요', 5000); }
+      if (!this.saveTimer) this.saveTimer = setTimeout(() => this.flush(), 3000);
+      return false;
+    }
+    this.saveFailedShown = false;
     this.onSaved(note.id);
+    return true;
   }
 
   // 저장 전인 지금 내용을 새 노트(충돌 사본)로 저장
@@ -431,7 +509,7 @@ export class Editor {
       el.className = 'page';
       el.dataset.pid = pg.id;
       el.dataset.index = i;
-      el.innerHTML = '<canvas class="bg"></canvas><div class="items imgs"></div><canvas class="ink"></canvas><div class="items texts"></div>';
+      el.innerHTML = '<canvas class="bg"></canvas><div class="items imgs"></div><canvas class="hl"></canvas><canvas class="ink"></canvas><div class="items texts"></div>';
       this.inner.appendChild(el);
       this.pageEls.set(pg.id, el);
       this.observer.observe(el);
@@ -517,7 +595,13 @@ export class Editor {
         bg.getContext('2d').drawImage(off, 0, 0);
         off.width = 0; off.height = 0;
       } catch (e) {
-        if (e && e.name !== 'RenderingCancelledException') console.warn(e);
+        if (e && e.name !== 'RenderingCancelledException') {
+          console.warn(e);
+          // 메모리 부족 등으로 실패하면 잠시 뒤 한 번 더 그려 봄
+          if ((el._retries = (el._retries || 0) + 1) <= 2) setTimeout(() => {
+            if (el._rs === rs && el.dataset.visible === '1') { el._rs = 0; this.renderPage(el); }
+          }, 1500);
+        }
       }
     } else {
       bg.width = W; bg.height = H;
@@ -527,15 +611,24 @@ export class Editor {
     }
   }
 
+  // 펜은 ink 층, 형광펜은 그 아래 hl 층(곱하기 합성). hl 층은 형광펜이 있는 페이지만 메모리를 씀
   drawInkCanvas(el, pg) {
-    const c = el.querySelector('canvas.ink');
     const rs = el._rs;
     if (!rs) return;
-    const ctx = c.getContext('2d');
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, c.width, c.height);
-    ctx.setTransform(rs, 0, 0, rs, 0, 0);
-    drawPageInk(ctx, this.ink[pg.id]);
+    const pi = this.ink[pg.id];
+    const c = el.querySelector('canvas.ink');
+    const paint = (canvas, fn) => {
+      const ctx = canvas.getContext('2d');
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.setTransform(rs, 0, 0, rs, 0, 0);
+      fn(ctx, pi);
+    };
+    paint(c, drawPens);
+    const h = el.querySelector('canvas.hl');
+    if (!hasHighlights(pi)) { if (h.width) { h.width = 0; h.height = 0; } return; }
+    if (h.width !== c.width || h.height !== c.height) { h.width = c.width; h.height = c.height; }
+    paint(h, drawHighlights);
   }
 
   releasePage(el) {
@@ -1307,7 +1400,7 @@ export class Editor {
       this.finishEditing();
       this.deselect();
       try { this.scroller.setPointerCapture(e.pointerId); } catch {}
-      const live = this.attachLive(pageEl);
+      const live = this.attachLive(pageEl, tool === 'hl');
       const [x, y] = this.pagePoint(pageEl, e);
       if (tool === 'eraser') {
         this.active = { kind: 'erase', pid, pageEl, live, before: this.snap(pid), lx: x, ly: y, id: e.pointerId };
@@ -1329,7 +1422,17 @@ export class Editor {
     if (!a || e.pointerId !== a.id) return;
     e.preventDefault();
     if (a.kind === 'stroke') {
-      if (a.snapped) return;
+      if (a.snapped) {
+        // 직선으로 바뀐 뒤에도 펜을 떼기 전까지는 끝점을 따라 움직임
+        if (a.snapLine) {
+          const [x, y] = this.pagePoint(a.pageEl, e);
+          const p = a.stroke.p;
+          p[3] = r1(a.snapLine.lock === 'v' ? p[0] : x);
+          p[4] = r1(a.snapLine.lock === 'h' ? p[1] : y);
+          if (!a.raf) a.raf = requestAnimationFrame(() => { a.raf = 0; this.drawLive(); });
+        }
+        return;
+      }
       const evs = e.getCoalescedEvents ? e.getCoalescedEvents() : [e];
       const p = a.stroke.p;
       for (const ev of (evs.length ? evs : [e])) {
@@ -1340,14 +1443,15 @@ export class Editor {
         p.push(r1(x), r1(y), Math.round(pr * 100) / 100);
       }
       if (!a.raf) a.raf = requestAnimationFrame(() => { a.raf = 0; this.drawLive(); });
-      // 펜이 한 자리에 잠깐 머물면 도형으로 보정
-      if (this.tools.shapeSnap) {
+      // 펜이 한 자리에 잠깐 머물면 보정: 형광펜은 직선, 펜은 직선·원·사각형
+      const isHl = a.stroke.t === 'hl';
+      if (isHl ? this.tools.hlStraight : this.tools.shapeSnap) {
         const lx = p[p.length - 3], ly = p[p.length - 2];
         const tol = 6 / this.scale;
         if (a.holdX == null || Math.hypot(lx - a.holdX, ly - a.holdY) > tol) {
           a.holdX = lx; a.holdY = ly;
           clearTimeout(a.holdTimer);
-          a.holdTimer = setTimeout(() => this.trySnap(a), 700);
+          a.holdTimer = setTimeout(() => this.trySnap(a), isHl ? HL_HOLD_MS : PEN_HOLD_MS);
         }
       }
     } else if (a.kind === 'erase') {
@@ -1383,11 +1487,12 @@ export class Editor {
 
   trySnap(a) {
     if (this.active !== a || a.snapped) return;
-    const shape = recognizeShape(a.stroke.p);
+    const shape = a.stroke.t === 'hl' ? straightLine(a.stroke.p) : recognizeShape(a.stroke.p);
     if (!shape) return;
     a.stroke.p = shape.p;
     a.stroke.k = 'poly';
     if (shape.closed) a.stroke.closed = true;
+    else a.snapLine = { lock: shape.lock || null };
     a.snapped = true;
     this.drawLive();
   }
@@ -1419,9 +1524,9 @@ export class Editor {
     }
   }
 
-  attachLive(pageEl) {
+  attachLive(pageEl, hl) {
     const c = document.createElement('canvas');
-    c.className = 'live';
+    c.className = hl ? 'live hl' : 'live';
     const rs = pageEl._rs || this.renderScale(this.pageOf(pageEl.dataset.pid));
     const pg = this.pageOf(pageEl.dataset.pid);
     c.width = Math.round(pg.w * rs);
@@ -1465,7 +1570,7 @@ export class Editor {
     let changed = false;
     const out = [];
     for (const s of pi.strokes) {
-      const p = s.p, n = p.length / 3;
+      let p = s.p, n = p.length / 3;
       const reach = r + s.w / 2;
       // 빠른 배제: 경계 상자
       let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -1478,6 +1583,8 @@ export class Editor {
         out.push(s);
         continue;
       }
+      // 직선·도형은 꼭짓점만 있으므로 촘촘한 점으로 바꿔서 판단 (가운데도 지워지게)
+      if (s.k === 'poly' && partial) { p = densify(s); n = p.length / 3; }
       const hit = new Uint8Array(n);
       let any = false;
       for (let i = 0; i < n; i++) {
@@ -1487,6 +1594,7 @@ export class Editor {
         for (let i = 0; i < n - 1 && !any; i++) {
           if (distToSeg(x, y, p[i * 3], p[i * 3 + 1], p[i * 3 + 3], p[i * 3 + 4]) <= reach) any = true;
         }
+        if (!any && s.closed && n > 2 && distToSeg(x, y, p[(n - 1) * 3], p[(n - 1) * 3 + 1], p[0], p[1]) <= reach) any = true;
       }
       if (!any) { out.push(s); continue; }
       changed = true;
@@ -1548,10 +1656,13 @@ export class Editor {
     if (t === 'pen' || t === 'hl') {
       const opt = t === 'hl' ? this.tools.hl : this.tools.pen;
       const isFav = this.tools.favs.some(f => f.t === t && f.c === opt.color && f.w === opt.width);
+      const on = t === 'hl' ? this.tools.hlStraight : this.tools.shapeSnap;
       html += `<div class="opt-row opt-text">
-        <button class="seg${this.tools.shapeSnap ? ' on' : ''}" data-snap>도형 보정 ${this.tools.shapeSnap ? '켜짐' : '꺼짐'}</button>
+        <button class="seg${on ? ' on' : ''}" data-snap>${t === 'hl' ? '직선 보정' : '도형 보정'} ${on ? '켜짐' : '꺼짐'}</button>
         <button class="seg" data-addfav ${isFav || this.tools.favs.length >= 4 ? 'disabled' : ''}>★ 즐겨찾기에 추가</button></div>`;
-      html += '<p class="opt-hint">선을 긋고 펜을 잠깐 멈추면 직선·원·사각형으로 바뀝니다</p>';
+      html += t === 'hl'
+        ? '<p class="opt-hint">긋고 끝에서 펜을 잠깐 멈추면 반듯한 직선이 됩니다. 거의 가로면 수평으로 맞춰요</p>'
+        : '<p class="opt-hint">선을 긋고 펜을 잠깐 멈추면 직선·원·사각형으로 바뀝니다</p>';
     }
     if (this.tools.favs.length && (t === 'pen' || t === 'hl')) {
       html += '<div class="opt-row fav-edit">' + this.tools.favs.map((f, i) =>
@@ -1576,7 +1687,11 @@ export class Editor {
     o.querySelectorAll('[data-mode]').forEach(b => b.onclick = () => { this.tools.eraser.mode = b.dataset.mode; this.afterOpt(); });
     o.querySelectorAll('[data-esize]').forEach(b => b.onclick = () => { this.tools.eraser.size = Number(b.dataset.esize); this.afterOpt(); });
     const snap = o.querySelector('[data-snap]');
-    if (snap) snap.onclick = () => { this.tools.shapeSnap = !this.tools.shapeSnap; this.afterOpt(); };
+    if (snap) snap.onclick = () => {
+      if (t === 'hl') this.tools.hlStraight = !this.tools.hlStraight;
+      else this.tools.shapeSnap = !this.tools.shapeSnap;
+      this.afterOpt();
+    };
     const add = o.querySelector('[data-addfav]');
     if (add) add.onclick = () => {
       this.tools.favs.push({ t, c: opt.color, w: opt.width });

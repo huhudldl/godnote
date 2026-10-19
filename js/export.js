@@ -1,6 +1,6 @@
 // 필기 포함 PDF 내보내기
 // 원본 PDF 페이지는 벡터 그대로 복사하고, 필기·텍스트·이미지는 투명 이미지로 위에 얹는다.
-import { drawPageInk, drawPaper, drawTexts } from './editor.js';
+import { drawHighlights, drawPens, drawPaper, drawTexts, hasHighlights } from './editor.js';
 
 const EXPORT_SCALE = 2;              // 144dpi
 const MAX_PIXELS = 12_000_000;
@@ -38,13 +38,18 @@ function hasContent(pi) {
   return pi && (pi.strokes.length || pi.texts.length || pi.images.length);
 }
 
-// 이미지 → 필기(형광펜 → 펜) → 텍스트 순서로 그림
-async function drawAnnotations(ctx, pi) {
-  if (!pi) return;
+async function drawImages(ctx, pi) {
   for (const im of pi.images) {
     try { ctx.drawImage(await loadImage(im.src), im.x, im.y, im.w, im.h); } catch {}
   }
-  drawPageInk(ctx, pi);
+}
+
+// 불투명한 바탕 위에: 이미지 → 형광펜 → 펜 → 텍스트 순서로 그림
+async function drawAnnotations(ctx, pi) {
+  if (!pi) return;
+  await drawImages(ctx, pi);
+  drawHighlights(ctx, pi);
+  drawPens(ctx, pi);
   drawTexts(ctx, pi.texts);
 }
 
@@ -54,7 +59,7 @@ function toBytes(canvas, type, q) {
 
 export async function exportNotePdf(note, ink, pdfBlob, onProgress = () => {}) {
   await loadScript('vendor/pdf-lib.min.js');
-  const { PDFDocument } = window.PDFLib;
+  const { PDFDocument, BlendMode } = window.PDFLib;
   const out = await PDFDocument.create();
   out.setTitle(note.name);
   out.setCreator('갓 노트');
@@ -77,13 +82,27 @@ export async function exportNotePdf(note, ink, pdfBlob, onProgress = () => {}) {
       const [copied] = await out.copyPages(src, [pg.pdf]);
       const page = out.addPage(copied);
       if (hasContent(pi)) {
+        // 투명한 층 세 장: 이미지, 형광펜(곱하기 — 아래 글자가 그대로 보임), 펜·텍스트
+        const layers = [
+          { has: pi.images.length, draw: ctx => drawImages(ctx, pi) },
+          { has: hasHighlights(pi), draw: ctx => drawHighlights(ctx, pi), blendMode: BlendMode.Multiply },
+          { has: pi.strokes.some(s => s.t !== 'hl') || pi.texts.length, draw: ctx => { drawPens(ctx, pi); drawTexts(ctx, pi.texts); } },
+        ];
+        const crop = page.getCropBox();
         const { c, k } = canvasFor(pg);
         const ctx = c.getContext('2d');
-        ctx.setTransform(k, 0, 0, k, 0, 0);
-        await drawAnnotations(ctx, pi);
-        const png = await out.embedPng(await toBytes(c, 'image/png'));
-        const crop = page.getCropBox();
-        page.drawImage(png, { x: crop.x, y: crop.y, width: crop.width, height: crop.height });
+        for (const L of layers) {
+          if (!L.has) continue;
+          ctx.setTransform(1, 0, 0, 1, 0, 0);
+          ctx.clearRect(0, 0, c.width, c.height);
+          ctx.setTransform(k, 0, 0, k, 0, 0);
+          await L.draw(ctx);
+          const png = await out.embedPng(await toBytes(c, 'image/png'));
+          const opts = { x: crop.x, y: crop.y, width: crop.width, height: crop.height };
+          if (L.blendMode) opts.blendMode = L.blendMode;
+          page.drawImage(png, opts);
+        }
+        c.width = 0; c.height = 0;
       }
       continue;
     }
