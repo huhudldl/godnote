@@ -160,18 +160,34 @@ async function api(url, opts = {}) {
     throw new Error('TOKEN_EXPIRED');
   }
   const headers = Object.assign({ Authorization: 'Bearer ' + token.access_token }, opts.headers || {});
-  const r = await fetch(url, Object.assign({}, opts, { headers }));
-  if (r.status === 401) {
-    token = null;
-    localStorage.removeItem(LS_TOKEN);
-    emit({ status: 'expired', message: '로그인이 만료되었습니다' });
-    throw new Error('TOKEN_EXPIRED');
-  }
-  if (!r.ok) {
+  // 요청 한도 초과(429·403 rateLimit)나 드라이브 서버 오류(5xx)는 잠깐 쉬었다가 다시 시도
+  for (let attempt = 0; ; attempt++) {
+    let r;
+    try {
+      r = await fetch(url, Object.assign({}, opts, { headers }));
+    } catch (e) {
+      // 아이패드에서 다른 앱으로 넘어가거나 와이파이가 끊기면 'Load failed' / 'Failed to fetch' 가 남
+      const err = new Error('NETWORK');
+      err.cause = e;
+      throw err;
+    }
+    if (r.status === 401) {
+      token = null;
+      localStorage.removeItem(LS_TOKEN);
+      emit({ status: 'expired', message: '로그인이 만료되었습니다' });
+      throw new Error('TOKEN_EXPIRED');
+    }
+    if (r.ok) return r;
     const text = await r.text().catch(() => '');
-    throw new Error(`드라이브 오류 ${r.status}: ${text.slice(0, 200)}`);
+    const retryable = r.status === 429 || r.status >= 500 || (r.status === 403 && /rateLimitExceeded/i.test(text));
+    if (retryable && attempt < 3) {
+      await new Promise(res => setTimeout(res, 1000 * 2 ** attempt + Math.random() * 500));
+      continue;
+    }
+    const err = new Error(`드라이브 오류 ${r.status}: ${text.slice(0, 200)}`);
+    err.status = r.status;
+    throw err;
   }
-  return r;
 }
 
 async function ensureFolder() {
@@ -213,7 +229,30 @@ function multipart(metadata, blob) {
   return { body, type: `multipart/related; boundary=${boundary}` };
 }
 
+// 한 번에 보내는 방식(multipart)은 5MB 이하용이라, 큰 PDF·필기는 나눠 보내는 방식(resumable)으로 올림
+const MULTIPART_LIMIT = 5 * 1024 * 1024;
+
+async function uploadResumable(fileId, metadata, blob) {
+  const url = fileId
+    ? `${UPLOAD}/files/${fileId}?uploadType=resumable&fields=id`
+    : `${UPLOAD}/files?uploadType=resumable&fields=id`;
+  const start = await api(url, {
+    method: fileId ? 'PATCH' : 'POST',
+    headers: {
+      'Content-Type': 'application/json; charset=UTF-8',
+      'X-Upload-Content-Type': blob.type || 'application/octet-stream',
+      'X-Upload-Content-Length': String(blob.size),
+    },
+    body: JSON.stringify(metadata),
+  });
+  const session = start.headers.get('Location');
+  if (!session) throw new Error('드라이브 업로드 주소를 받지 못했습니다');
+  const r = await api(session, { method: 'PUT', headers: { 'Content-Type': blob.type || 'application/octet-stream' }, body: blob });
+  return (await r.json()).id;
+}
+
 async function upload(fileId, metadata, blob) {
+  if (blob.size > MULTIPART_LIMIT) return uploadResumable(fileId, metadata, blob);
   const { body, type } = multipart(metadata, blob);
   const url = fileId
     ? `${UPLOAD}/files/${fileId}?uploadType=multipart&fields=id`
@@ -345,16 +384,26 @@ async function pullNote(remote, local, ctx, force) {
 }
 
 // 두 기기에서 같은 노트를 고친 경우: 이 기기 내용을 '충돌 사본'으로 따로 보관하고 원래 노트는 다른 기기 내용으로
-async function keepConflictCopy(local) {
+// 이 기기 내용을 먼저 기억해 두고, 다른 기기 내용을 다 받은 뒤에만 사본을 저장함
+// (받다가 실패하면 사본을 만들지 않아서, 동기화가 실패할 때마다 사본이 하나씩 늘지 않게)
+async function resolveConflict(local, remote, ctx) {
+  const pdf = local.hasPdf ? await db.getPdf(local.id) : null;
+  const ink = await db.getInk(local.id);
+  await pullNote(remote, local, ctx, true);
   const id = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   const d = new Date();
   const stamp = `${d.getMonth() + 1}/${d.getDate()} ${d.getHours()}:${String(d.getMinutes()).padStart(2, '0')}`;
   const copy = Object.assign({}, local, { id, name: `${local.name} (충돌 사본 ${stamp})`, updatedAt: Date.now() });
   delete copy.lastPage;
-  if (local.hasPdf) { const pdf = await db.getPdf(local.id); if (pdf) await db.putPdf(id, pdf); }
-  await db.putInk(id, await db.getInk(local.id));
+  if (pdf) await db.putPdf(id, pdf);
+  await db.putInk(id, ink);
   await db.putNote(copy);
   return id;
+}
+
+// 연결이 끊겨서 난 오류인지 (이때는 오류로 띄우지 않고 다음에 다시 시도)
+function isNetworkError(e) {
+  return e && (e.message === 'NETWORK' || (e.name === 'TypeError' && /load failed|failed to fetch|network/i.test(e.message)) || e.name === 'AbortError');
 }
 
 // 폴더 목록은 사본 대신 합침
@@ -426,47 +475,68 @@ export async function sync(onPulled) {
     const locals = await db.allNotes();
     const localMap = Object.fromEntries(locals.map(n => [n.id, n]));
 
-    for (const note of locals) {
-      const r = remotes[note.id] || {};
-      const ru = r.updatedAt || 0;
-      const lu = note.updatedAt || 0;
-      const b = base[note.id];
-      if (!r.json) {
-        if (!note.deleted) { await pushNote(note, r, ctx); base[note.id] = lu; }
-      } else if (lu === ru) {
-        base[note.id] = lu;
-        if (note.hasPdf && !note.deleted && !r.pdf) await pushNote(note, r, ctx);
-      } else if (b != null && lu > b && ru > b) {
-        // 양쪽 모두 마지막 동기화 이후에 바뀜 → 충돌
-        if (note.id === '__folders__' || note.kind === 'folders') {
-          base[note.id] = await mergeFolders(note, r, ctx);
-          pulled.push(note.id);
-        } else {
-          if (!note.deleted) { await keepConflictCopy(note); conflicts++; pendingResync = true; }
-          await pullNote(r, note, ctx, true);
-          base[note.id] = ru;
-          pulled.push(note.id);
-        }
-      } else if (lu > ru) {
-        await pushNote(note, r, ctx);
-        base[note.id] = lu;
-      } else {
-        if (await pullNote(r, note, ctx)) { pulled.push(note.id); base[note.id] = ru; }
+    // 노트 하나가 실패해도 나머지는 계속 맞춤 (예전에는 한 노트 때문에 전체 동기화가 매번 멈췄음)
+    const failed = [];
+    const each = async (id, name, fn) => {
+      try { await fn(); } catch (e) {
+        if (isNetworkError(e) || e.message === 'TOKEN_EXPIRED') throw e;
+        console.error('노트 동기화 실패', id, e);
+        failed.push({ name: name || '이름 없는 노트', message: e.message });
       }
+    };
+
+    for (const note of locals) {
+      await each(note.id, note.name, async () => {
+        const r = remotes[note.id] || {};
+        const ru = r.updatedAt || 0;
+        const lu = note.updatedAt || 0;
+        const b = base[note.id];
+        if (!r.json) {
+          if (!note.deleted) { await pushNote(note, r, ctx); base[note.id] = lu; }
+        } else if (lu === ru) {
+          base[note.id] = lu;
+          if (note.hasPdf && !note.deleted && !r.pdf) await pushNote(note, r, ctx);
+        } else if (b != null && lu > b && ru > b) {
+          // 양쪽 모두 마지막 동기화 이후에 바뀜 → 충돌
+          if (note.id === '__folders__' || note.kind === 'folders') {
+            base[note.id] = await mergeFolders(note, r, ctx);
+            pulled.push(note.id);
+          } else {
+            if (note.deleted) await pullNote(r, note, ctx, true);
+            else { await resolveConflict(note, r, ctx); conflicts++; pendingResync = true; }
+            base[note.id] = ru;
+            pulled.push(note.id);
+          }
+        } else if (lu > ru) {
+          await pushNote(note, r, ctx);
+          base[note.id] = lu;
+        } else {
+          if (await pullNote(r, note, ctx)) { pulled.push(note.id); base[note.id] = ru; }
+        }
+      });
     }
     for (const id in remotes) {
       const r = remotes[id];
       if (localMap[id] || !r.json) continue;
-      await pullNote(r, null, ctx);
-      base[id] = r.updatedAt;
-      pulled.push(id);
+      await each(id, r.json.name.replace(/\.godnote\.json$/, ''), async () => {
+        await pullNote(r, null, ctx);
+        base[id] = r.updatedAt;
+        pulled.push(id);
+      });
     }
     await cleanupAssets(ctx).catch(e => console.warn('정리 실패', e));
     const now = Date.now();
     localStorage.setItem('godnote.lastSync', String(now));
-    emit({ status: 'idle', message: '', lastSync: now });
+    if (failed.length) {
+      const f = failed[0];
+      const more = failed.length > 1 ? ` 외 ${failed.length - 1}개` : '';
+      emit({ status: 'error', message: `'${f.name}'${more} 노트를 맞추지 못했습니다 — ${f.message}`, lastSync: now });
+    } else emit({ status: 'idle', message: '', lastSync: now });
   } catch (e) {
-    if (e.message !== 'TOKEN_EXPIRED') emit({ status: 'error', message: e.message });
+    // 폴더를 드라이브에서 지웠을 수도 있으니 다음에는 다시 찾음
+    folderId = null;
+    if (isNetworkError(e)) emit({ status: 'offline', message: '연결이 불안정해서 잠시 뒤 다시 동기화합니다' });
+    else if (e.message !== 'TOKEN_EXPIRED') emit({ status: 'error', message: e.message });
     console.error(e);
   } finally {
     localStorage.setItem(LS_BASE, JSON.stringify(base));
