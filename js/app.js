@@ -709,7 +709,10 @@ $('#save-client').onclick = () => {
   renderAccount();
 };
 
-const esc = v => String(v || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+// function 선언이어야 위쪽의 drive.onChange 가 시작할 때 바로 불러도 동작함
+function esc(v) {
+  return String(v || '').replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+}
 
 function renderAccount() {
   const box = $('#account-box');
