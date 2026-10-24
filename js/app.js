@@ -661,12 +661,16 @@ function syncLabel(s) {
   }
 }
 
+let lastSyncError = '';
 drive.onChange(s => {
   const b = $('#sync-btn');
   b.dataset.status = s.status;
   b.querySelector('.sync-text').textContent = syncLabel(s);
   b.title = s.message || s.email || '';
-  if (s.status === 'error') toast('동기화 오류: ' + s.message, 5000);
+  // 같은 오류는 1분마다 다시 띄우지 않고, 한 번 성공하거나 내용이 바뀔 때만 다시 알림
+  if (s.status === 'error' && s.message !== lastSyncError) toast('동기화 오류: ' + s.message, 6000);
+  if (s.status === 'error') lastSyncError = s.message;
+  else if (s.status === 'idle') lastSyncError = '';
   // 편집 화면 아래 저장 상태 표시
   if (!editorEl.hidden && editor.note && !editor.hasPendingSave()) {
     const time = new Date().toLocaleTimeString('ko-KR', { hour: 'numeric', minute: '2-digit' });
